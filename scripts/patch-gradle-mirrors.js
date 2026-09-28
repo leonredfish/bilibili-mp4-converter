@@ -227,6 +227,7 @@ function findJdk17() {
       'C:/Program Files/Microsoft',
       'C:/Program Files/Zulu',
       'D:/Programs/SDK_Tools',
+      'D:/Programs',
     );
     push('C:/Program Files/Android/Android Studio/jbr');
   } else if (process.platform === 'darwin') {
