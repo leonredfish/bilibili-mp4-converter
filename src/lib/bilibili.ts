@@ -90,8 +90,14 @@ function toVideoItem(dir: string, entry: BilibiliEntry): VideoItem {
 async function scanForEntries(dir: string, items: VideoItem[], fs: FsAdapter): Promise<void> {
   const entry = await readEntry(dir, fs);
   if (entry) {
-    // 命中一个缓存条目：确认 video.m4s 存在才加入
-    if (await fs.exists(`${dir}/${entry.type_tag}/video.m4s`)) {
+    // 命中一个缓存条目：必须 video.m4s 与 audio.m4s **都在** 才算可合并。
+    // 只查 video.m4s 的话，音轨缺失的条目会被列出来，然后在合并阶段才失败；
+    // 而那是批次中间的失败——前面已成功的成果会被一并丢掉。
+    const [hasVideo, hasAudio] = await Promise.all([
+      fs.exists(`${dir}/${entry.type_tag}/video.m4s`),
+      fs.exists(`${dir}/${entry.type_tag}/audio.m4s`),
+    ]);
+    if (hasVideo && hasAudio) {
       items.push(toVideoItem(dir, entry));
     }
     return; // entry.json 所在目录即叶子，不再深入
