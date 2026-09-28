@@ -91,17 +91,29 @@ export default function ConverterScreen() {
   };
 
   const handleRequestPermission = async () => {
+    // 必须用 MANAGE_APP_ALL_FILES_ACCESS_PERMISSION（带 APP）：
+    // MANAGE_ALL_FILES_ACCESS_PERMISSION 只认列表页，配上 package: data 后
+    // 在多数 ROM 上解析不到任何 Activity，会静默失败并回退到 App 信息页。
     try {
-      await IntentLauncher.startActivityAsync('android.settings.MANAGE_ALL_FILES_ACCESS_PERMISSION', {
-        data: `package:${APP_PACKAGE}`,
-      });
+      await IntentLauncher.startActivityAsync(
+        'android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION',
+        { data: `package:${APP_PACKAGE}` },
+      );
+      return;
     } catch {
-      // 部分国产 ROM（ColorOS 等）不注册该标准 intent，回退到打开应用设置页
-      try {
-        await Linking.openSettings();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
+      // 部分 ROM 不注册该 action，继续回退
+    }
+    try {
+      // 退一步：打开「所有文件访问权限」列表页（需在其中手动找到本 App）
+      await IntentLauncher.startActivityAsync('android.settings.MANAGE_ALL_FILES_ACCESS_PERMISSION');
+      return;
+    } catch {
+      // 再退：App 信息页
+    }
+    try {
+      await Linking.openSettings();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -124,7 +136,7 @@ export default function ConverterScreen() {
           </Pressable>
 
           <ThemedText type="small" themeColor="textSecondary">
-            跳转后在设置里找到「所有文件访问权限」（部分机型叫「允许管理所有文件」），通常在 设置 → 应用 → Bilibili MP4 → 权限 里。
+            注意：本 App 的「权限」页是空的（它只申请「所有文件访问权限」这类特殊权限，不占用普通运行时权限），别去 应用 → Bilibili MP4 → 权限，那里没有任何可点的项。正确入口：设置 → 应用 → 特殊应用权限（部分机型叫「权限管理」/「其他权限」）→ 所有文件访问权限 → 打开 Bilibili MP4 的开关。
           </ThemedText>
 
           <Pressable
