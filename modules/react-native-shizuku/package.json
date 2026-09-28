@@ -1,0 +1,26 @@
+{
+  "name": "react-native-shizuku",
+  "version": "0.1.0",
+  "description": "Shizuku binding for React Native (Android): run code with shell/ADB identity.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "react-native": "src/index.ts",
+  "files": [
+    "src",
+    "android",
+    "README.md"
+  ],
+  "keywords": [
+    "react-native",
+    "android",
+    "shizuku",
+    "adb",
+    "shell",
+    "root"
+  ],
+  "license": "Apache-2.0",
+  "private": true,
+  "peerDependencies": {
+    "react-native": ">=0.71.0"
+  }
+}

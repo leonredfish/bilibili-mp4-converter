@@ -1,0 +1,44 @@
+apply plugin: "com.android.library"
+
+def safeExtGet(prop, fallback) {
+  return rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
+}
+
+// RN 版本从 node_modules 读取，不依赖 rootProject.ext 的隐式约定
+def reactNativeVersion = {
+  try {
+    def pkg = new groovy.json.JsonSlurper()
+      .parseText(new File(rootDir, "../node_modules/react-native/package.json").text)
+    return pkg.version
+  } catch (Exception ignored) {
+    return safeExtGet("reactNativeVersion", "+")
+  }
+}()
+
+android {
+  namespace "dev.leonredfish.shizuku"
+
+  compileSdk safeExtGet("compileSdkVersion", 35)
+
+  defaultConfig {
+    minSdk safeExtGet("minSdkVersion", 24)
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+
+  lint {
+    abortOnError false
+  }
+}
+
+dependencies {
+  implementation "com.facebook.react:react-android:${reactNativeVersion}"
+
+  // Shizuku API + Provider（Maven Central）
+  def shizukuVersion = "13.1.5"
+  implementation "dev.rikka.shizuku:api:${shizukuVersion}"
+  implementation "dev.rikka.shizuku:provider:${shizukuVersion}"
+}

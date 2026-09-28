@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Linking,
@@ -9,6 +9,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as IntentLauncher from 'expo-intent-launcher';
+import * as Shizuku from 'react-native-shizuku';
+import type { ShizukuStatus } from 'react-native-shizuku';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -24,12 +26,62 @@ import {
 
 const APP_PACKAGE = 'com.leonredfish.bilibilimp4';
 
+/** Shizuku 按钮文案（按状态机映射） */
+const SHIZUKU_BUTTON_LABEL: Record<ShizukuStatus, string> = {
+  unsupported: '本机不支持 Shizuku',
+  'not-installed': '安装 Shizuku',
+  'not-running': '激活 Shizuku',
+  'no-permission': '授权 Shizuku',
+  ready: 'Shizuku 已就绪',
+};
+
 export default function ConverterScreen() {
   const [dir, setDir] = useState('');
   const [items, setItems] = useState<VideoItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<string[]>([]);
   const [error, setError] = useState('');
+
+  const [shizukuStatus, setShizukuStatus] = useState<ShizukuStatus>('unsupported');
+  const [shizukuInfo, setShizukuInfo] = useState<Shizuku.ShizukuInfo | null>(null);
+
+  const refreshShizuku = useCallback(async () => {
+    setShizukuStatus(await Shizuku.getStatus());
+    setShizukuInfo(await Shizuku.getShizukuInfo());
+  }, []);
+
+  useEffect(() => {
+    void refreshShizuku();
+    const subscription = Shizuku.addStatusListener((status) => setShizukuStatus(status));
+    return () => subscription.remove();
+  }, [refreshShizuku]);
+
+  const handleShizukuPress = async () => {
+    setError('');
+    try {
+      switch (shizukuStatus) {
+        case 'not-installed':
+          await Linking.openURL('https://shizuku.rikka.app/download/');
+          break;
+        case 'not-running':
+          setError('Shizuku 服务未运行：请打开 Shizuku App，按引导用「无线调试」启动，再回来点「刷新」。');
+          break;
+        case 'no-permission': {
+          const granted = await Shizuku.requestPermission();
+          if (!granted) setError('未获得 Shizuku 授权（可能选了「拒绝且不再询问」）。');
+          await refreshShizuku();
+          break;
+        }
+        case 'ready':
+          setError('Shizuku 已就绪。文件读取能力将在 M1（UserService）接入。');
+          break;
+        default:
+          setError('当前设备/系统不支持 Shizuku。');
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   const runScan = async (path: string) => {
     setBusy(true);
@@ -126,6 +178,30 @@ export default function ConverterScreen() {
             <ThemedText themeColor="textSecondary">
               将 B 站缓存的 video.m4s + audio.m4s 无损合并为 MP4。
             </ThemedText>
+          </ThemedView>
+
+          <ThemedView type="backgroundElement" style={styles.panel}>
+            <ThemedText type="smallBold">Shizuku（M0 诊断）</ThemedText>
+            <ThemedText type="small" themeColor="textSecondary">
+              状态：{shizukuStatus}
+              {shizukuInfo
+                ? ` · v${shizukuInfo.versionName} (API ${shizukuInfo.apiVersion})`
+                : ''}
+            </ThemedText>
+            <Pressable
+              onPress={handleShizukuPress}
+              disabled={busy}
+              style={({ pressed }) => [styles.button, pressed && styles.pressed]}>
+              <ThemedText style={styles.buttonText}>
+                {SHIZUKU_BUTTON_LABEL[shizukuStatus]}
+              </ThemedText>
+            </Pressable>
+            <Pressable
+              onPress={() => void refreshShizuku()}
+              disabled={busy}
+              style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}>
+              <ThemedText type="small">刷新 Shizuku 状态</ThemedText>
+            </Pressable>
           </ThemedView>
 
           <Pressable

@@ -57,3 +57,8 @@ example
 # generated native folders
 /ios
 /android
+
+# 本地库（modules/*）的 Android 构建产物
+modules/*/android/build/
+modules/*/android/.gradle/
+modules/*/android/.cxx/

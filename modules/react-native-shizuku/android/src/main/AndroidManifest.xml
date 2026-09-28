@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  库自带 manifest —— 由 AGP 在 app 构建时合并，因此消费方不需要任何
+  config plugin / 手动改 manifest。（这也是本库与 Expo 无关的原因之一。）
+
+  ShizukuProvider 用于接收 Shizuku server（以 shell/root 身份运行）下发的 binder。
+
+  注意：官方 README 的示例里还有一行可选的
+    android:permission="android.permission.INTERACT_ACROSS_USERS_FULL"
+  它是 signature|privileged 级权限，可能反过来挡住 shell(uid 2000) 访问本 provider。
+  M0 先不加；等 binder 链路验证通过后，再作为加固项单独评估。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <provider
+      android:name="rikka.shizuku.ShizukuProvider"
+      android:authorities="${applicationId}.shizuku"
+      android:multiprocess="false"
+      android:enabled="true"
+      android:exported="true" />
+  </application>
+</manifest>
