@@ -54,6 +54,8 @@ export type CopyResult = {
 export type ShizukuInfo = {
   versionName: string;
   apiVersion: number;
+  /** UserService 是否已绑定（M1） */
+  userServiceReady?: boolean;
 };
 
 /** addStatusListener 返回的订阅句柄 */

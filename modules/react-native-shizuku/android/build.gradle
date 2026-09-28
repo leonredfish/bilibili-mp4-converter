@@ -29,6 +29,11 @@ android {
     targetCompatibility JavaVersion.VERSION_17
   }
 
+  // AGP 8 起 aidl 构建特性默认关闭，UserService 的 IShizukuFileService 需要它
+  buildFeatures {
+    aidl true
+  }
+
   lint {
     abortOnError false
   }

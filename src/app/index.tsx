@@ -44,6 +44,7 @@ export default function ConverterScreen() {
 
   const [shizukuStatus, setShizukuStatus] = useState<ShizukuStatus>('unsupported');
   const [shizukuInfo, setShizukuInfo] = useState<Shizuku.ShizukuInfo | null>(null);
+  const [m1Result, setM1Result] = useState('');
 
   const refreshShizuku = useCallback(async () => {
     setShizukuStatus(await Shizuku.getStatus());
@@ -80,6 +81,47 @@ export default function ConverterScreen() {
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleShizukuSelfTest = async () => {
+    setError('');
+    setM1Result('测试中…');
+    try {
+      // exec 会触发 ensureService()（自动绑定 UserService）
+      const id = await Shizuku.exec('id');
+      const info = await Shizuku.getShizukuInfo();
+      const entries = await Shizuku.listDir(DEFAULT_BILIBILI_CACHE_DIR);
+
+      // 再下一层：验证 readTextFile + copyFile（M3 依赖的能力）
+      const avid = entries.find((e) => e.type === 'directory');
+      let step2: string[] = [];
+      if (avid) {
+        const subs = await Shizuku.listDir(avid.path);
+        const entryJson = `${avid.path}/${subs[0].name}/entry.json`;
+        const raw = await Shizuku.readTextFile(entryJson);
+        const title = (JSON.parse(raw) as { title?: string }).title ?? '?';
+        const dst = `/storage/emulated/0/Android/data/${APP_PACKAGE}/cache/shizuku-selftest.json`;
+        const bytes = await Shizuku.copyFile(entryJson, dst);
+        step2 = [
+          `readTextFile(entry.json) → title="${title}"`,
+          `copyFile → ${bytes} 字节 → ${dst}`,
+        ];
+      }
+
+      const lines = [
+        `Shizuku API ${info?.apiVersion ?? '?'} · UserService ${
+          info?.userServiceReady ? '已绑定' : '未绑定'
+        }`,
+        `exec("id") → code=${id.code}`,
+        `  ${(id.stdout || id.stderr).trim()}`,
+        `listDir(缓存目录) → ${entries.length} 项`,
+        ...entries.slice(0, 2).map((e) => `  ${e.type === 'directory' ? 'd' : '-'} ${e.name}`),
+        ...step2,
+      ];
+      setM1Result(lines.join('\n'));
+    } catch (e) {
+      setM1Result(`失败：${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -202,6 +244,19 @@ export default function ConverterScreen() {
               style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}>
               <ThemedText type="small">刷新 Shizuku 状态</ThemedText>
             </Pressable>
+
+            <Pressable
+              onPress={handleShizukuSelfTest}
+              disabled={busy}
+              style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}>
+              <ThemedText type="small">M1 自检：exec id + 读 B 站缓存目录</ThemedText>
+            </Pressable>
+
+            {m1Result ? (
+              <ThemedText type="small" themeColor="textSecondary">
+                {m1Result}
+              </ThemedText>
+            ) : null}
           </ThemedView>
 
           <Pressable
