@@ -33,11 +33,24 @@ yarn-error.*
 .DS_Store
 *.pem
 
-# local env files
-.env*.local
+# Windows
+Thumbs.db
+desktop.ini
+
+# environment variables
+.env
+.env.*
+!.env.example
 
 # typescript
 *.tsbuildinfo
+
+# test coverage
+coverage/
+
+# editor / agent local configs
+.vscode/settings.json
+.claude/
 
 example
 
