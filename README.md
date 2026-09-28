@@ -35,7 +35,7 @@ App 流程：选择缓存目录 → 扫描 `entry.json` 识别视频（含分 P�
 
 > 转码是本地文件操作，依赖原生模块，**无法用 Expo Go**，需 dev build。Web 端不支持。
 
-前置：安装 Android Studio + JDK 17 + Android SDK 36。
+前置：**JDK 17**（必须是 17，不要用 18/21）+ Android SDK 36（需含 `platforms;android-36` 与 `build-tools;36.0.0`）。Android Studio 可选。
 
 ```bash
 npm install
@@ -47,7 +47,23 @@ npx expo prebuild -p android
 npx expo run:android
 ```
 
-首次运行后，需要在系统设置里授予 **「所有文件访问权限」**（`MANAGE_EXTERNAL_STORAGE`），才能读取 B 站客户端的缓存目录（通常在 `/storage/emulated/0/Android/data/tv.danmaku.bili/download/`）。
+`npm install` 会自动跑 `postinstall`（即 `scripts/patch-gradle-mirrors.js`），它做三件事：
+
+1. 把 Gradle 发行版下载地址换成镜像，并把 wrapper 的 `networkTimeout` 提到 10 分钟（默认只有 10 秒，130MB 在国内必然超时）；
+2. 给主工程**和两个 included build**（RN / expo 的 Gradle 插件）的仓库列表加上国内 Maven 镜像——它们是独立构建，读不到主工程配置，必须单独打；
+3. 探测本机 JDK 17 并写入 `org.gradle.java.home`，避免 Gradle 经 `foojay-resolver` 去 `api.foojay.io` 自动下载工具链（国内不可达，会静默卡住数分钟）。
+
+> `android/` 由 `expo prebuild` 生成且已被 gitignore，**每次 prebuild 后都要重跑一次补丁**：
+>
+> ```bash
+> npx expo prebuild -p android && npm run patch:gradle
+> ```
+
+脚本可用环境变量覆盖（见脚本头部注释）：`GRADLE_DIST_MIRROR`、`MAVEN_MIRRORS`、`JAVA17_HOME`、`SKIP_GRADLE_PATCH=1`。国内网络建议直接把 `JAVA_HOME` 指向 JDK 17，一劳永逸。
+
+首次运行后，需要在系统设置里授予 **「所有文件访问权限」**（`MANAGE_EXTERNAL_STORAGE`）。
+注意入口是 **设置 → 应用 → 特殊应用权限（部分机型叫「权限管理」/「其他权限」）→ 所有文件访问权限**，
+而**不是** App 自己的「权限」页——那一页是空的（本 App 只用特殊权限，不占用普通运行时权限）。
 
 ## 目录结构
 
@@ -60,6 +76,17 @@ src/
   hooks/           # 自定义 hooks
   constants/       # 主题色、间距等
 ```
+
+## 已知限制
+
+**Android 11+ 读不到 B 站缓存目录。** 出于隐私保护，Android 11 起 App 无法访问其他 App 在外部存储的私有目录，**即使已授予「所有文件访问权限」也一样**（Android 13 进一步封死了用原始文件路径绕过的口子）：
+
+> Write access to all internal storage directories **except `/Android/data/`** … Apps that are granted this permission still can't access the app-specific directories that belong to other apps.
+> —— [Manage all files on a storage device](https://developer.android.com/training/data-storage/manage-all-files)
+
+而 B 站缓存固定在 `/storage/emulated/0/Android/data/tv.danmaku.bili/download/`，且 B 站不允许自定义缓存路径。
+
+因此在 Android 11 及以上，「扫描 B 站缓存目录」无法直接工作。可行路径：先用 **Shizuku / adb / 支持 Shizuku 的文件管理器**把缓存导出到公共目录（如 `/sdcard/Download/bili/`），再用本 App 的「手动选择目录」处理。彻底解决需要给 App 接入 Shizuku。
 
 ## 说明
 
