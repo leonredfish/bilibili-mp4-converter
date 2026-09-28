@@ -23,6 +23,7 @@ import {
   scanDirectory,
   type VideoItem,
 } from '@/lib/bilibili';
+import { shizukuFs } from '@/lib/shizuku-fs';
 
 const APP_PACKAGE = 'com.leonredfish.bilibilimp4';
 
@@ -44,7 +45,7 @@ export default function ConverterScreen() {
 
   const [shizukuStatus, setShizukuStatus] = useState<ShizukuStatus>('unsupported');
   const [shizukuInfo, setShizukuInfo] = useState<Shizuku.ShizukuInfo | null>(null);
-  const [m1Result, setM1Result] = useState('');
+  const [shizukuResult, setShizukuResult] = useState('');
 
   const refreshShizuku = useCallback(async () => {
     setShizukuStatus(await Shizuku.getStatus());
@@ -84,44 +85,23 @@ export default function ConverterScreen() {
     }
   };
 
-  const handleShizukuSelfTest = async () => {
+  const handleShizukuScan = async () => {
     setError('');
-    setM1Result('测试中…');
+    setShizukuResult('扫描中…');
     try {
-      // exec 会触发 ensureService()（自动绑定 UserService）
       const id = await Shizuku.exec('id');
-      const info = await Shizuku.getShizukuInfo();
-      const entries = await Shizuku.listDir(DEFAULT_BILIBILI_CACHE_DIR);
-
-      // 再下一层：验证 readTextFile + copyFile（M3 依赖的能力）
-      const avid = entries.find((e) => e.type === 'directory');
-      let step2: string[] = [];
-      if (avid) {
-        const subs = await Shizuku.listDir(avid.path);
-        const entryJson = `${avid.path}/${subs[0].name}/entry.json`;
-        const raw = await Shizuku.readTextFile(entryJson);
-        const title = (JSON.parse(raw) as { title?: string }).title ?? '?';
-        const dst = `/storage/emulated/0/Android/data/${APP_PACKAGE}/cache/shizuku-selftest.json`;
-        const bytes = await Shizuku.copyFile(entryJson, dst);
-        step2 = [
-          `readTextFile(entry.json) → title="${title}"`,
-          `copyFile → ${bytes} 字节 → ${dst}`,
-        ];
-      }
+      // 关键：同一份扫描逻辑，只把 FS 适配器换成 shizukuFs
+      const found = await scanDirectory(DEFAULT_BILIBILI_CACHE_DIR, shizukuFs);
 
       const lines = [
-        `Shizuku API ${info?.apiVersion ?? '?'} · UserService ${
-          info?.userServiceReady ? '已绑定' : '未绑定'
-        }`,
-        `exec("id") → code=${id.code}`,
-        `  ${(id.stdout || id.stderr).trim()}`,
-        `listDir(缓存目录) → ${entries.length} 项`,
-        ...entries.slice(0, 2).map((e) => `  ${e.type === 'directory' ? 'd' : '-'} ${e.name}`),
-        ...step2,
+        `身份：${id.stdout.trim().split(' ')[0]}`,
+        `scanDirectory(缓存目录, shizukuFs) → 找到 ${found.length} 个视频`,
+        ...found.slice(0, 4).map((v) => `  P${v.page} ${v.part ?? v.title}`),
+        found.length > 4 ? `  …（共 ${found.length} 个）` : '',
       ];
-      setM1Result(lines.join('\n'));
+      setShizukuResult(lines.filter(Boolean).join('\n'));
     } catch (e) {
-      setM1Result(`失败：${e instanceof Error ? e.message : String(e)}`);
+      setShizukuResult(`失败：${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -246,15 +226,15 @@ export default function ConverterScreen() {
             </Pressable>
 
             <Pressable
-              onPress={handleShizukuSelfTest}
+              onPress={handleShizukuScan}
               disabled={busy}
               style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}>
-              <ThemedText type="small">M1 自检：exec id + 读 B 站缓存目录</ThemedText>
+              <ThemedText type="small">Shizuku 扫描 B 站缓存</ThemedText>
             </Pressable>
 
-            {m1Result ? (
+            {shizukuResult ? (
               <ThemedText type="small" themeColor="textSecondary">
-                {m1Result}
+                {shizukuResult}
               </ThemedText>
             ) : null}
           </ThemedView>

@@ -3,6 +3,9 @@ import { errorCodes, isErrorWithCode, pickDirectory as pickDirectoryNative } fro
 import ReactNativeBlobUtil from 'react-native-blob-util';
 import sanitize from 'sanitize-filename';
 
+import { blobFs } from './blob-fs';
+import type { FsAdapter } from './fs-adapter';
+
 /** B 站缓存的 entry.json 结构（只用到的字段） */
 type BilibiliEntry = {
   title: string;
@@ -61,11 +64,11 @@ export async function pickDirectory(): Promise<string> {
   }
 }
 
-async function readEntry(dir: string): Promise<BilibiliEntry | null> {
+async function readEntry(dir: string, fs: FsAdapter): Promise<BilibiliEntry | null> {
   const entryPath = `${dir}/entry.json`;
-  if (!(await ReactNativeBlobUtil.fs.exists(entryPath))) return null;
+  if (!(await fs.exists(entryPath))) return null;
   try {
-    const json = await ReactNativeBlobUtil.fs.readFile(entryPath, 'utf8');
+    const json = await fs.readText(entryPath);
     return JSON.parse(json) as BilibiliEntry;
   } catch {
     // entry.json 损坏或非法时跳过该目录
@@ -84,11 +87,11 @@ function toVideoItem(dir: string, entry: BilibiliEntry): VideoItem {
   };
 }
 
-async function scanForEntries(dir: string, items: VideoItem[]): Promise<void> {
-  const entry = await readEntry(dir);
+async function scanForEntries(dir: string, items: VideoItem[], fs: FsAdapter): Promise<void> {
+  const entry = await readEntry(dir, fs);
   if (entry) {
     // 命中一个缓存条目：确认 video.m4s 存在才加入
-    if (await ReactNativeBlobUtil.fs.exists(`${dir}/${entry.type_tag}/video.m4s`)) {
+    if (await fs.exists(`${dir}/${entry.type_tag}/video.m4s`)) {
       items.push(toVideoItem(dir, entry));
     }
     return; // entry.json 所在目录即叶子，不再深入
@@ -96,7 +99,7 @@ async function scanForEntries(dir: string, items: VideoItem[]): Promise<void> {
 
   let files: string[];
   try {
-    files = await ReactNativeBlobUtil.fs.ls(dir);
+    files = await fs.ls(dir);
   } catch {
     return; // 无权限或目录不存在
   }
@@ -104,9 +107,9 @@ async function scanForEntries(dir: string, items: VideoItem[]): Promise<void> {
   for (const file of files) {
     const sub = `${dir}/${file}`;
     try {
-      const stat = await ReactNativeBlobUtil.fs.stat(sub);
+      const stat = await fs.stat(sub);
       if (stat.type === 'directory') {
-        await scanForEntries(sub, items);
+        await scanForEntries(sub, items, fs);
       }
     } catch {
       // 忽略无法访问的子项
@@ -117,10 +120,18 @@ async function scanForEntries(dir: string, items: VideoItem[]): Promise<void> {
 /**
  * 递归扫描目录，找出所有含 entry.json 的 B 站缓存。
  * 兼容 download/<avid>/c_<cid>/entry.json 这类多层嵌套结构。
+ *
+ * `fs` 决定用「谁的权限」去读：
+ * - 默认 `blobFs`：App 自身权限，适用于用户手动选择/导出的公共目录
+ * - 传 `shizukuFs`：以 shell/root 身份读，Android 11+ 下读其他 App
+ *   的 /Android/data/ 的唯一途径
  */
-export async function scanDirectory(rootDir: string): Promise<VideoItem[]> {
+export async function scanDirectory(
+  rootDir: string,
+  fs: FsAdapter = blobFs,
+): Promise<VideoItem[]> {
   const items: VideoItem[] = [];
-  await scanForEntries(rootDir, items);
+  await scanForEntries(rootDir, items, fs);
   return items;
 }
 
