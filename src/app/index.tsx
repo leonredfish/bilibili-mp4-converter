@@ -36,11 +36,17 @@ const SHIZUKU_BUTTON_LABEL: Record<ShizukuStatus, string> = {
   ready: 'Shizuku 已就绪',
 };
 
+/** 一次合并批次的结果：成功的输出路径 + 失败的条目与原因 */
+type MergeOutcome = {
+  ok: string[];
+  failed: { label: string; message: string }[];
+};
+
 export default function ConverterScreen() {
   const [dir, setDir] = useState('');
   const [items, setItems] = useState<VideoItem[]>([]);
   const [busy, setBusy] = useState(false);
-  const [results, setResults] = useState<string[]>([]);
+  const [mergeOutcome, setMergeOutcome] = useState<MergeOutcome | null>(null);
   const [error, setError] = useState('');
 
   const [shizukuStatus, setShizukuStatus] = useState<ShizukuStatus>('unsupported');
@@ -93,6 +99,13 @@ export default function ConverterScreen() {
       // 关键：同一份扫描逻辑，只把 FS 适配器换成 shizukuFs
       const found = await scanDirectory(DEFAULT_BILIBILI_CACHE_DIR, shizukuFs);
 
+      // 接入统一的 items 列表，与「手动选择目录」共用后续合并流程。
+      // 注意：这些条目的路径在 /Android/data 下，FFmpeg 以 App 自身身份读不到，
+      // 必须等 M3 的「先提取到 App 可读目录」才能真正合并成功。
+      setItems(found);
+      setMergeOutcome(null);
+      setDir(DEFAULT_BILIBILI_CACHE_DIR);
+
       const lines = [
         `身份：${id.stdout.trim().split(' ')[0]}`,
         `scanDirectory(缓存目录, shizukuFs) → 找到 ${found.length} 个视频`,
@@ -108,7 +121,7 @@ export default function ConverterScreen() {
   const runScan = async (path: string) => {
     setBusy(true);
     setError('');
-    setResults([]);
+    setMergeOutcome(null);
     setItems([]);
     try {
       const found = await scanDirectory(path);
@@ -148,20 +161,28 @@ export default function ConverterScreen() {
   };
 
   const handleMerge = async () => {
-    try {
-      setError('');
-      setResults([]);
-      setBusy(true);
-      const out: string[] = [];
-      for (const item of items) {
-        out.push(await mergeToMp4(item, DEFAULT_OUTPUT_DIR));
+    setError('');
+    setMergeOutcome(null);
+    setBusy(true);
+
+    // 逐项容错：任意一项失败都不中断整批，也不丢弃已成功的结果。
+    // 旧实现把 setResults 写在循环之外，一旦中途抛错，前面已经写盘的文件
+    // 一个都不会显示，用户会误以为全失败了。
+    const ok: string[] = [];
+    const failed: { label: string; message: string }[] = [];
+
+    for (const item of items) {
+      const label = `P${item.page} ${item.part ?? item.title}`;
+      try {
+        ok.push(await mergeToMp4(item, DEFAULT_OUTPUT_DIR));
+      } catch (e) {
+        failed.push({ label, message: e instanceof Error ? e.message : String(e) });
       }
-      setResults(out);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
+      // 每项结束即更新，长批次也能看到进展
+      setMergeOutcome({ ok: [...ok], failed: [...failed] });
     }
+
+    setBusy(false);
   };
 
   const handleRequestPermission = async () => {
@@ -294,12 +315,21 @@ export default function ConverterScreen() {
             </ThemedView>
           ) : null}
 
-          {results.length > 0 ? (
+          {mergeOutcome && (mergeOutcome.ok.length > 0 || mergeOutcome.failed.length > 0) ? (
             <ThemedView type="backgroundElement" style={styles.panel}>
-              <ThemedText type="smallBold">合并完成：</ThemedText>
-              {results.map((p) => (
+              <ThemedText type="smallBold">
+                合并完成：成功 {mergeOutcome.ok.length} / 失败 {mergeOutcome.failed.length}
+              </ThemedText>
+
+              {mergeOutcome.ok.map((p) => (
                 <ThemedText key={p} type="small" themeColor="textSecondary" numberOfLines={1}>
-                  {p}
+                  ✓ {p}
+                </ThemedText>
+              ))}
+
+              {mergeOutcome.failed.map((f, i) => (
+                <ThemedText key={`fail-${i}-${f.label}`} type="small" numberOfLines={3}>
+                  ✗ {f.label} —— {f.message}
                 </ThemedText>
               ))}
             </ThemedView>
