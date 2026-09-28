@@ -1,16 +1,22 @@
 {
   "expo": {
-    "name": "Pi React Native Demo",
-    "slug": "pi-react-native-demo",
+    "name": "Bilibili MP4 Converter",
+    "slug": "bilibili-mp4-converter",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "pirndemo",
+    "scheme": "bilibilimp4converter",
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon"
     },
     "android": {
+      "package": "com.leonredfish.bilibilimp4",
+      "permissions": [
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "MANAGE_EXTERNAL_STORAGE"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
