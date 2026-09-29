@@ -49,6 +49,7 @@ export default function ConverterScreen() {
     handleShizukuAction,
     handleScanDefault,
     handlePick,
+    handlePickOutputDir,
     handleMerge,
     handleRetryFailed,
     cancelMerge,
@@ -87,7 +88,12 @@ export default function ConverterScreen() {
                 onPick={() => void handlePick()}
               />
 
-              <OutputDirPicker value={outputDir} onChange={setOutputDir} disabled={busy} />
+              <OutputDirPicker
+                value={outputDir}
+                onChange={setOutputDir}
+                onPick={() => void handlePickOutputDir()}
+                disabled={busy}
+              />
 
               <OutputStrategyPicker
                 value={outputStrategy}

@@ -229,6 +229,26 @@ export function useConverter() {
   };
 
   /**
+   * 用系统选择器挑**输出**目录。
+   *
+   * 复用 `pickDirectory()`：它内部已经是「SAF 选目录 → decodeDirectoryUri 转真实路径」，
+   * 而 FFmpegKit 只吃真实路径、吃不了 tree URI。
+   * 注意这里**不扫描**——输出目录与「扫到什么」无关。
+   */
+  const handlePickOutputDir = async () => {
+    if (Platform.OS === 'web') {
+      setError(WEB_MESSAGE);
+      return;
+    }
+    try {
+      const picked = await pickDirectory();
+      if (picked) setOutputDir(picked);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  /**
    * 执行一批合并。
    *
    * 抽出 targets 参数，是为了让「重试失败项」复用同一条路径，而不是再写一份循环。
@@ -343,6 +363,7 @@ export function useConverter() {
     handleShizukuAction,
     handleScanDefault,
     handlePick,
+    handlePickOutputDir,
     handleMerge,
     handleRetryFailed,
     cancelMerge,
