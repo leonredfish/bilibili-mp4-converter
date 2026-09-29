@@ -58,6 +58,8 @@ type NativeShizukuModule = {
   readTextFile(path: string): Promise<string>;
   copyFile(src: string, dst: string): Promise<number>;
   remove(path: string, recursive: boolean): Promise<boolean>;
+  // M3
+  getExternalCacheDir(): Promise<string>;
 };
 
 let cachedNative: NativeShizukuModule | null = null;
@@ -303,4 +305,28 @@ export async function copyTree(
 
   await walk(src, dst);
   return result;
+}
+
+/* ------------------------------------------------------------------ *
+ * M3：中转目录
+ * ------------------------------------------------------------------ */
+
+/**
+ * App 的「外部私有缓存目录」绝对路径，形如
+ * `/storage/emulated/0/Android/data/<pkg>/cache`。
+ *
+ * **Shizuku（shell）可写、App 自己可读** —— 因此可作为
+ * 「把 /Android/data 下的 m4s 搬到 FFmpeg 能读的位置」的中转目录。
+ *
+ * 不涉及提权，因此不需要 UserService、也不要求 Shizuku 就绪。
+ */
+export async function getExternalCacheDir(): Promise<string> {
+  if (!isAndroid()) {
+    throw new ShizukuError('UNSUPPORTED', 'Shizuku is only available on Android.');
+  }
+  try {
+    return await getNative().getExternalCacheDir();
+  } catch (error) {
+    throw toShizukuError(error);
+  }
 }

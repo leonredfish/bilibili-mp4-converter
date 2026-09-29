@@ -5,6 +5,7 @@ import sanitize from 'sanitize-filename';
 
 import { blobFs } from './blob-fs';
 import type { FsAdapter } from './fs-adapter';
+import type { Materializer } from './materializer';
 
 /** B 站缓存的 entry.json 结构（只用到的字段） */
 type BilibiliEntry = {
@@ -147,21 +148,44 @@ async function ensureDir(path: string): Promise<void> {
   }
 }
 
+/** 通知系统媒体库，否则新写入的 mp4 不会出现在相册/播放器里（尽力而为，失败不影响结果） */
+async function notifyMediaStore(path: string): Promise<void> {
+  try {
+    await ReactNativeBlobUtil.fs.scanFile([{ path, mime: 'video/mp4' }]);
+  } catch {
+    // 忽略：媒体库通知失败不影响合并结果
+  }
+}
+
 /**
  * 用 FFmpeg 的流拷贝（-c copy）把 video.m4s + audio.m4s 无损合并为 MP4，
  * 返回输出文件路径。
+ *
+ * `materializer` 负责把 item 的 m4s 变成 **FFmpegKit（App 进程）可读** 的路径：
+ * Shizuku 场景必须先搬到中转目录，公共目录场景是直通。临时文件在成功与失败时
+ * 都会被清理（`finally`）。
  */
-export async function mergeToMp4(item: VideoItem, outDir: string): Promise<string> {
-  await ensureDir(outDir);
-  const fileName = sanitize(`${item.page}_${item.part ?? item.title}`);
-  const outPath = `${outDir}/${fileName}.mp4`;
+export async function mergeToMp4(
+  item: VideoItem,
+  outDir: string,
+  materializer: Materializer,
+): Promise<string> {
+  const media = await materializer.materialize(item);
+  try {
+    await ensureDir(outDir);
+    const fileName = sanitize(`${item.page}_${item.part ?? item.title}`);
+    const outPath = `${outDir}/${fileName}.mp4`;
 
-  const session = await FFmpegKit.execute(
-    `-i "${item.videoPath}" -i "${item.audioPath}" -c copy -y -- "${outPath}"`,
-  );
-  const returnCode = await session.getReturnCode();
-  if (!ReturnCode.isSuccess(returnCode)) {
-    throw new Error(`FFmpeg 合并失败（code: ${returnCode}）`);
+    const session = await FFmpegKit.execute(
+      `-i "${media.video}" -i "${media.audio}" -c copy -y -- "${outPath}"`,
+    );
+    const returnCode = await session.getReturnCode();
+    if (!ReturnCode.isSuccess(returnCode)) {
+      throw new Error(`FFmpeg 合并失败（code: ${returnCode}）`);
+    }
+    await notifyMediaStore(outPath);
+    return outPath;
+  } finally {
+    await media.dispose();
   }
-  return outPath;
 }

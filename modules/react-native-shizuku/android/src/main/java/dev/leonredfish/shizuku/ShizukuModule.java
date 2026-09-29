@@ -22,6 +22,7 @@ import com.facebook.react.bridge.WritableArray;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -427,6 +428,34 @@ public class ShizukuModule extends ReactContextBaseJavaModule {
     }
     try {
       promise.resolve(service.remove(path, recursive));
+    } catch (Throwable t) {
+      promise.reject("IO_ERROR", String.valueOf(t.getMessage()), t);
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * M3：materialize 辅助
+   * ------------------------------------------------------------------ */
+
+  /**
+   * 返回 App 的「外部私有缓存目录」绝对路径，形如：
+   * /storage/emulated/0/Android/data/<pkg>/cache
+   *
+   * 选它的原因：**Shizuku（shell）可写、App 自己可读**，因此可作为
+   * 「把 /Android/data 下的 m4s 搬到 FFmpeg 能读的位置」的中转目录。
+   * （App 内部私有目录 /data/data/<pkg>/ 则 shell 写不进去。）
+   *
+   * 注意：本方法不涉及提权，因此不需要 UserService。
+   */
+  @ReactMethod
+  public void getExternalCacheDir(Promise promise) {
+    try {
+      File dir = getReactApplicationContext().getExternalCacheDir();
+      if (dir == null) {
+        promise.reject("IO_ERROR", "External cache dir unavailable (external storage not mounted?)");
+        return;
+      }
+      promise.resolve(dir.getAbsolutePath());
     } catch (Throwable t) {
       promise.reject("IO_ERROR", String.valueOf(t.getMessage()), t);
     }

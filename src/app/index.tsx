@@ -23,6 +23,8 @@ import {
   scanDirectory,
   type VideoItem,
 } from '@/lib/bilibili';
+import { passthroughMaterializer, type Materializer } from '@/lib/materializer';
+import { createShizukuMaterializer } from '@/lib/shizuku-materializer';
 import { shizukuFs } from '@/lib/shizuku-fs';
 
 const APP_PACKAGE = 'com.leonredfish.bilibilimp4';
@@ -45,6 +47,9 @@ type MergeOutcome = {
 export default function ConverterScreen() {
   const [dir, setDir] = useState('');
   const [items, setItems] = useState<VideoItem[]>([]);
+  // 与 items 配套：决定「合并前怎么把 m4s 变成 FFmpeg 可读路径」。
+  // Shizuku 扫描 → 需搬运；手动选公共目录 → 直通。
+  const [materializer, setMaterializer] = useState<Materializer | null>(null);
   const [busy, setBusy] = useState(false);
   const [mergeOutcome, setMergeOutcome] = useState<MergeOutcome | null>(null);
   const [error, setError] = useState('');
@@ -59,6 +64,7 @@ export default function ConverterScreen() {
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 初次拉取 Shizuku 状态；setState 均在 await 之后，不会同步触发级联渲染
     void refreshShizuku();
     const subscription = Shizuku.addStatusListener((status) => setShizukuStatus(status));
     return () => subscription.remove();
@@ -96,12 +102,15 @@ export default function ConverterScreen() {
     setShizukuResult('扫描中…');
     try {
       const id = await Shizuku.exec('id');
-      // 关键：同一份扫描逻辑，只把 FS 适配器换成 shizukuFs
+      // 同一份扫描逻辑，只把 FS 适配器换成 shizukuFs
       const found = await scanDirectory(DEFAULT_BILIBILI_CACHE_DIR, shizukuFs);
 
-      // 接入统一的 items 列表，与「手动选择目录」共用后续合并流程。
-      // 注意：这些条目的路径在 /Android/data 下，FFmpeg 以 App 自身身份读不到，
-      // 必须等 M3 的「先提取到 App 可读目录」才能真正合并成功。
+      // M3：这些条目的 m4s 在 /Android/data 下，而 FFmpegKit 跑在 App 进程读不到，
+      // 必须先由 shell 搬到「shell 可写、App 可读」的外部私有目录。这里把搬运
+      // 策略一并装配，后续 handleMerge 与「手动选择目录」共用同一套合并流程。
+      const tempDir = await Shizuku.getExternalCacheDir();
+      setMaterializer(createShizukuMaterializer(tempDir));
+
       setItems(found);
       setMergeOutcome(null);
       setDir(DEFAULT_BILIBILI_CACHE_DIR);
@@ -109,6 +118,7 @@ export default function ConverterScreen() {
       const lines = [
         `身份：${id.stdout.trim().split(' ')[0]}`,
         `scanDirectory(缓存目录, shizukuFs) → 找到 ${found.length} 个视频`,
+        `中转目录：${tempDir}`,
         ...found.slice(0, 4).map((v) => `  P${v.page} ${v.part ?? v.title}`),
         found.length > 4 ? `  …（共 ${found.length} 个）` : '',
       ];
@@ -126,6 +136,8 @@ export default function ConverterScreen() {
     try {
       const found = await scanDirectory(path);
       setItems(found);
+      // 手动选择的是公共目录，源文件本来就 App 可读 → 直通，不做搬运
+      setMaterializer(passthroughMaterializer);
       if (found.length === 0) {
         setError('未找到缓存。请确认已授予「所有文件访问权限」，且缓存位于所选目录。');
       }
@@ -174,7 +186,7 @@ export default function ConverterScreen() {
     for (const item of items) {
       const label = `P${item.page} ${item.part ?? item.title}`;
       try {
-        ok.push(await mergeToMp4(item, DEFAULT_OUTPUT_DIR));
+        ok.push(await mergeToMp4(item, DEFAULT_OUTPUT_DIR, materializer ?? passthroughMaterializer));
       } catch (e) {
         failed.push({ label, message: e instanceof Error ? e.message : String(e) });
       }

@@ -2,6 +2,8 @@
  * Web 端空实现：浏览器无本地文件访问与 FFmpeg 能力，
  * 仅用于保证 Web 端能正常打包渲染 UI，实际转码只在 Android 上可用。
  */
+import type { Materializer } from './materializer';
+
 export type VideoItem = {
   directory: string;
   title: string;
@@ -13,6 +15,9 @@ export type VideoItem = {
 
 export const DEFAULT_OUTPUT_DIR = '/storage/emulated/0/Movies';
 
+export const DEFAULT_BILIBILI_CACHE_DIR =
+  '/storage/emulated/0/Android/data/tv.danmaku.bili/download';
+
 export async function pickDirectory(): Promise<string> {
   return '';
 }
@@ -21,6 +26,10 @@ export async function scanDirectory(_rootDir: string): Promise<VideoItem[]> {
   return [];
 }
 
-export async function mergeToMp4(_item: VideoItem, _outDir: string): Promise<string> {
+export async function mergeToMp4(
+  _item: VideoItem,
+  _outDir: string,
+  _materializer: Materializer,
+): Promise<string> {
   return '';
 }

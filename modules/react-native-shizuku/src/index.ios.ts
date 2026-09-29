@@ -92,3 +92,7 @@ export async function copyTree(
 ): Promise<CopyResult> {
   throw new ShizukuError('UNSUPPORTED', MESSAGE);
 }
+
+export async function getExternalCacheDir(): Promise<string> {
+  throw new ShizukuError('UNSUPPORTED', MESSAGE);
+}
