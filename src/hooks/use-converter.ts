@@ -12,13 +12,13 @@ import {
   pickDirectory,
   resolveOutputPath,
   scanDirectory,
-  type OutputStrategy,
   type VideoItem,
 } from '@/lib/bilibili';
 import { ANDROID_API_LEVEL, NEEDS_SHELL_FOR_APP_DATA } from '@/lib/fs-adapter';
 import { passthroughMaterializer, type Materializer } from '@/lib/materializer';
 import { createShizukuMaterializer } from '@/lib/shizuku-materializer';
 import { shizukuFs } from '@/lib/shizuku-fs';
+import { useConverterSettingsStore } from '@/stores/converter-settings-store';
 
 const APP_PACKAGE = 'com.leonredfish.bilibilimp4';
 const WEB_MESSAGE = '目录选择与转码仅支持 Android，请在真机或模拟器上运行';
@@ -74,9 +74,16 @@ export function useConverter() {
   const [busy, setBusy] = useState(false);
   const [mergeOutcome, setMergeOutcome] = useState<MergeOutcome | null>(null);
   const [error, setError] = useState('');
-  const [outputDir, setOutputDir] = useState(DEFAULT_OUTPUT_DIR);
-  /** 输出文件已存在时的策略（默认「跳过」，避免误点把上次成果冲掉） */
-  const [outputStrategy, setOutputStrategy] = useState<OutputStrategy>('skip');
+  // 输出相关设置放在全局 store 且持久化：重启 App 不再被打回默认，
+  // 长批次调一次就一直有效。详见 stores/converter-settings-store.ts。
+  const outputDir = useConverterSettingsStore((state) => state.outputDir);
+  const setOutputDir = useConverterSettingsStore((state) => state.setOutputDir);
+  const outputStrategy = useConverterSettingsStore((state) => state.outputStrategy);
+  const setOutputStrategy = useConverterSettingsStore((state) => state.setOutputStrategy);
+
+  // store 里存的是输入框原文（允许为空，方便整段重打），所以真正用之前兜一次底；
+  // 否则会拼出 "/xxx.mp4" 这种往存储根目录写的路径。
+  const effectiveOutputDir = outputDir.trim() || DEFAULT_OUTPUT_DIR;
 
   /** 合并进度（长批次要能看到进展） */
   const [progress, setProgress] = useState<MergeProgress | null>(null);
@@ -250,12 +257,17 @@ export function useConverter() {
       setProgress({ done: i, total: targets.length, label });
       try {
         // 先按「输出已存在策略」定路径；skip 时直接得 null（这一步不做搬运，零成本）
-        const outPath = await resolveOutputPath(item, outputDir, outputStrategy);
+        const outPath = await resolveOutputPath(item, effectiveOutputDir, outputStrategy);
         if (outPath === null) {
-          skipped.push(outputPathFor(item, outputDir));
+          skipped.push(outputPathFor(item, effectiveOutputDir));
         } else {
           ok.push(
-            await mergeToMp4(item, outputDir, materializer ?? passthroughMaterializer, outPath),
+            await mergeToMp4(
+              item,
+              effectiveOutputDir,
+              materializer ?? passthroughMaterializer,
+              outPath,
+            ),
           );
         }
       } catch (e) {
