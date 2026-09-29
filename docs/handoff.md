@@ -177,7 +177,7 @@ scripts/patch-gradle-mirrors.js   国内构建补丁（postinstall）
 
 **风险**
 - Android 16 / 新版 Play 系统更新可能让 **Shizuku 也读不到 `/Android/data`**（上游 issue #1574 / #1807）——需监控
-- Google Play 政策：`MANAGE_EXTERNAL_STORAGE` 若上架需处理（侧滑载入无碍）
+- Google Play 政策：`MANAGE_EXTERNAL_STORAGE` 若上架需处理（侧载安装无碍）
 - 空间：提取中转会临时多占单视频体积
 
 ---
