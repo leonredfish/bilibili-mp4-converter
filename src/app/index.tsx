@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Linking,
@@ -7,6 +7,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as IntentLauncher from 'expo-intent-launcher';
@@ -16,10 +17,13 @@ import type { ShizukuStatus } from 'react-native-shizuku';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
+import { useTheme } from '@/hooks/use-theme';
 import {
   DEFAULT_BILIBILI_CACHE_DIR,
   DEFAULT_OUTPUT_DIR,
   mergeToMp4,
+  outputExists,
+  outputPathFor,
   pickDirectory,
   scanDirectory,
   type VideoItem,
@@ -31,20 +35,40 @@ import { shizukuFs } from '@/lib/shizuku-fs';
 
 const APP_PACKAGE = 'com.leonredfish.bilibilimp4';
 
-/** Shizuku 按钮文案（按状态机映射） */
-const SHIZUKU_BUTTON_LABEL: Record<ShizukuStatus, string> = {
+/**
+ * Shizuku 按钮文案（**状态机驱动**）：未就绪时点它去装 / 激活 / 授权，
+ * 就绪时点它直接扫描。这样「Shizuku 相关操作」只占一个按钮，
+ * 而不是当初 M0 阶段那样——「状态机按钮」+「扫描按钮」两个并列。
+ */
+const SHIZUKU_ACTION_LABEL: Record<ShizukuStatus, string> = {
   unsupported: '本机不支持 Shizuku',
   'not-installed': '安装 Shizuku',
   'not-running': '激活 Shizuku',
   'no-permission': '授权 Shizuku',
-  ready: 'Shizuku 已就绪',
+  ready: '用 Shizuku 读取 B 站缓存',
 };
 
-/** 一次合并批次的结果：成功的输出路径 + 失败的条目与原因 */
+/** 一次合并批次的结果 */
 type MergeOutcome = {
+  /** 新写出的输出路径 */
   ok: string[];
-  failed: { label: string; message: string }[];
+  /** 目标已存在、按策略跳过的输出路径 */
+  skipped: string[];
+  /** 失败项：保留 item 本身，供「重试失败项」直接复用 */
+  failed: { item: VideoItem; label: string; message: string }[];
 };
+
+/**
+ * 输出目录预设。
+ *
+ * 这里用**真实路径**而不是 SAF 选目录：FFmpegKit 需要直接文件路径，
+ * SAF 的 tree URI 它用不了（要转存一道，得不偿失）。
+ */
+const OUTPUT_DIR_PRESETS = [
+  { label: 'Movies', path: '/storage/emulated/0/Movies' },
+  { label: 'Download', path: '/storage/emulated/0/Download' },
+  { label: 'DCIM', path: '/storage/emulated/0/DCIM' },
+];
 
 /**
  * 各厂商 ROM 里「所有文件访问权限」的手动入口。
@@ -116,6 +140,7 @@ async function requestLegacyStoragePermission(): Promise<boolean> {
 }
 
 export default function ConverterScreen() {
+  const theme = useTheme();
   const [dir, setDir] = useState('');
   const [items, setItems] = useState<VideoItem[]>([]);
   // 与 items 配套：决定「合并前怎么把 m4s 变成 FFmpeg 可读路径」。
@@ -125,9 +150,17 @@ export default function ConverterScreen() {
   const [mergeOutcome, setMergeOutcome] = useState<MergeOutcome | null>(null);
   const [error, setError] = useState('');
 
+  /** 输出目录（可配置；默认 Movies） */
+  const [outputDir, setOutputDir] = useState(DEFAULT_OUTPUT_DIR);
+  /** 合并进度（长批次要能看到进展） */
+  const [progress, setProgress] = useState<{ done: number; total: number; label: string } | null>(
+    null,
+  );
+  /** 取消标志：合并循环在每个项开始前检查它（单条中转可达 ~450MB，不可能立即中断） */
+  const cancelRef = useRef(false);
+
   const [shizukuStatus, setShizukuStatus] = useState<ShizukuStatus>('unsupported');
   const [shizukuInfo, setShizukuInfo] = useState<Shizuku.ShizukuInfo | null>(null);
-  const [shizukuResult, setShizukuResult] = useState('');
 
   const refreshShizuku = useCallback(async () => {
     setShizukuStatus(await Shizuku.getStatus());
@@ -141,61 +174,61 @@ export default function ConverterScreen() {
     return () => subscription.remove();
   }, [refreshShizuku]);
 
-  const handleShizukuPress = async () => {
+  /** 以 shell 身份扫描 B 站缓存（仅在 Shizuku ready 时调用） */
+  const runShizukuScan = async () => {
+    setBusy(true);
+    setError('');
+    setMergeOutcome(null);
+    setItems([]);
+    try {
+      // 这些条目的 m4s 在 /Android/data 下，而 FFmpegKit 跑在 App 进程读不到，
+      // 必须先由 shell 搬到「shell 可写、App 可读」的外部私有目录。
+      // 这里把搬运策略一并装配，后续 handleMerge 与「手动选择目录」共用同一套合并流程。
+      const tempDir = await Shizuku.getExternalCacheDir();
+      setMaterializer(createShizukuMaterializer(tempDir));
+
+      // 同一份扫描逻辑，只把 FS 适配器换成 shizukuFs
+      const found = await scanDirectory(DEFAULT_BILIBILI_CACHE_DIR, shizukuFs);
+      setItems(found);
+      setDir(DEFAULT_BILIBILI_CACHE_DIR);
+      if (found.length === 0) {
+        setError('B 站缓存目录下未找到可合并的视频（需要 entry.json + video.m4s + audio.m4s）。');
+      }
+    } catch (e) {
+      setError(`Shizuku 扫描失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * Shizuku 的**唯一**入口：未就绪 → 推进状态机（装 / 激活 / 授权）；就绪 → 扫描。
+   */
+  const handleShizukuAction = async () => {
     setError('');
     try {
       switch (shizukuStatus) {
         case 'not-installed':
           await Linking.openURL('https://shizuku.rikka.app/download/');
-          break;
+          return;
         case 'not-running':
-          setError('Shizuku 服务未运行：请打开 Shizuku App，按引导用「无线调试」启动，再回来点「刷新」。');
-          break;
+          setError('Shizuku 服务未运行：请打开 Shizuku App，用「无线调试」启动，再回来。');
+          return;
         case 'no-permission': {
           const granted = await Shizuku.requestPermission();
           if (!granted) setError('未获得 Shizuku 授权（可能选了「拒绝且不再询问」）。');
           await refreshShizuku();
-          break;
+          return;
         }
-        case 'ready':
-          setError('Shizuku 已就绪。文件读取能力将在 M1（UserService）接入。');
-          break;
+        case 'unsupported':
+          setError('本机不支持 Shizuku，请改用「扫描 B 站缓存目录」或「手动选择目录」。');
+          return;
         default:
-          setError('当前设备/系统不支持 Shizuku。');
+          break;
       }
+      await runShizukuScan();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  const handleShizukuScan = async () => {
-    setError('');
-    setShizukuResult('扫描中…');
-    try {
-      const id = await Shizuku.exec('id');
-      // 同一份扫描逻辑，只把 FS 适配器换成 shizukuFs
-      const found = await scanDirectory(DEFAULT_BILIBILI_CACHE_DIR, shizukuFs);
-
-      // M3：这些条目的 m4s 在 /Android/data 下，而 FFmpegKit 跑在 App 进程读不到，
-      // 必须先由 shell 搬到「shell 可写、App 可读」的外部私有目录。这里把搬运
-      // 策略一并装配，后续 handleMerge 与「手动选择目录」共用同一套合并流程。
-      const tempDir = await Shizuku.getExternalCacheDir();
-      setMaterializer(createShizukuMaterializer(tempDir));
-
-      setItems(found);
-      setMergeOutcome(null);
-      setDir(DEFAULT_BILIBILI_CACHE_DIR);
-
-      const lines = [
-        `身份：${id.stdout.trim().split(' ')[0]}`,
-        `scanDirectory(缓存目录, shizukuFs) → 找到 ${found.length} 个视频`,
-        `中转目录：${tempDir}`,
-        ...found.slice(0, 4).map((v) => `  P${v.page} ${v.part ?? v.title}`),
-        found.length > 4 ? `  …（共 ${found.length} 个）` : '',
-      ];
-      setShizukuResult(lines.filter(Boolean).join('\n'));
-    } catch (e) {
-      setShizukuResult(`失败：${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -260,29 +293,62 @@ export default function ConverterScreen() {
     }
   };
 
-  const handleMerge = async () => {
+  /**
+   * 执行一批合并。
+   *
+   * 抽出 targets 参数，是为了让「重试失败项」能复用同一条路径，
+   * 而不是再写一份循环。
+   */
+  const runMerge = async (targets: VideoItem[]) => {
     setError('');
     setMergeOutcome(null);
+    setProgress(null);
     setBusy(true);
+    cancelRef.current = false;
 
     // 逐项容错：任意一项失败都不中断整批，也不丢弃已成功的结果。
-    // 旧实现把 setResults 写在循环之外，一旦中途抛错，前面已经写盘的文件
-    // 一个都不会显示，用户会误以为全失败了。
+    // （旧实现把结果写在循环之外，中途抛错时前面已写盘的文件一个都不会显示。）
     const ok: string[] = [];
-    const failed: { label: string; message: string }[] = [];
+    const skipped: string[] = [];
+    const failed: MergeOutcome['failed'] = [];
+    let cancelled = false;
 
-    for (const item of items) {
+    for (let i = 0; i < targets.length; i++) {
+      if (cancelRef.current) {
+        cancelled = true;
+        break;
+      }
+      const item = targets[i];
       const label = `P${item.page} ${item.part ?? item.title}`;
+      setProgress({ done: i, total: targets.length, label });
       try {
-        ok.push(await mergeToMp4(item, DEFAULT_OUTPUT_DIR, materializer ?? passthroughMaterializer));
+        // 默认不覆盖已存在的输出（见 outputExists 的注释）
+        if (await outputExists(item, outputDir)) {
+          skipped.push(outputPathFor(item, outputDir));
+        } else {
+          ok.push(await mergeToMp4(item, outputDir, materializer ?? passthroughMaterializer));
+        }
       } catch (e) {
-        failed.push({ label, message: e instanceof Error ? e.message : String(e) });
+        failed.push({ item, label, message: e instanceof Error ? e.message : String(e) });
       }
       // 每项结束即更新，长批次也能看到进展
-      setMergeOutcome({ ok: [...ok], failed: [...failed] });
+      setMergeOutcome({ ok: [...ok], skipped: [...skipped], failed: [...failed] });
     }
 
+    setProgress(null);
     setBusy(false);
+    if (cancelled) {
+      const done = ok.length + skipped.length + failed.length;
+      setError(`已取消：本批完成 ${done} / ${targets.length} 项。`);
+    }
+  };
+
+  const handleMerge = () => {
+    void runMerge(items);
+  };
+
+  const handleRetryFailed = () => {
+    if (mergeOutcome) void runMerge(mergeOutcome.failed.map((entry) => entry.item));
   };
 
   const handleRequestPermission = async () => {
@@ -324,48 +390,24 @@ export default function ConverterScreen() {
           </ThemedView>
 
           <ThemedView type="backgroundElement" style={styles.panel}>
-            <ThemedText type="smallBold">Shizuku（M0 诊断）</ThemedText>
-            <ThemedText type="small" themeColor="textSecondary">
-              状态：{shizukuStatus}
-              {shizukuInfo
-                ? ` · v${shizukuInfo.versionName} (API ${shizukuInfo.apiVersion})`
-                : ''}
-            </ThemedText>
             <Pressable
-              onPress={handleShizukuPress}
+              onPress={() => void handleShizukuAction()}
               disabled={busy}
               style={({ pressed }) => [styles.button, pressed && styles.pressed]}>
               <ThemedText style={styles.buttonText}>
-                {SHIZUKU_BUTTON_LABEL[shizukuStatus]}
+                {SHIZUKU_ACTION_LABEL[shizukuStatus]}
               </ThemedText>
-            </Pressable>
-            <Pressable
-              onPress={() => void refreshShizuku()}
-              disabled={busy}
-              style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}>
-              <ThemedText type="small">刷新 Shizuku 状态</ThemedText>
-            </Pressable>
-
-            <Pressable
-              onPress={handleShizukuScan}
-              disabled={busy}
-              style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}>
-              <ThemedText type="small">Shizuku 扫描 B 站缓存</ThemedText>
             </Pressable>
 
             <ThemedText type="small" themeColor="textSecondary">
+              {shizukuStatus === 'ready'
+                ? `Shizuku 已就绪${shizukuInfo ? ` · v${shizukuInfo.versionName} (API ${shizukuInfo.apiVersion})` : ''}`
+                : `Shizuku 状态：${shizukuStatus}`}
+              {'\n'}
               {NEEDS_SHELL_FOR_APP_DATA
-                ? `✅ 本机（Android API ${ANDROID_API_LEVEL}）适用。`
-                : `本机（Android API ${ANDROID_API_LEVEL}）非必需，用「扫描 B 站缓存目录」即可。`}
-              {'\n'}适用于 Android 11 及以上（需 Shizuku 已装并激活）；以 shell 身份读取，是 11+
-              读 /Android/data/ 的唯一途径。
+                ? `✅ 本机（Android API ${ANDROID_API_LEVEL}）适用。需 Shizuku 已装并激活；11+ 读 /Android/data 只能走它。`
+                : `本机（Android API ${ANDROID_API_LEVEL}）非必需 —— 下面的「扫描 B 站缓存目录」就够了。`}
             </ThemedText>
-
-            {shizukuResult ? (
-              <ThemedText type="small" themeColor="textSecondary">
-                {shizukuResult}
-              </ThemedText>
-            ) : null}
           </ThemedView>
 
           <Pressable
@@ -407,6 +449,37 @@ export default function ConverterScreen() {
             所有版本通用。适用于缓存已导出到公共目录（如 Download/）的情况，不依赖任何特殊权限。
           </ThemedText>
 
+          <ThemedView style={styles.outputDirBlock}>
+            <ThemedText type="small" themeColor="textSecondary">
+              输出目录（FFmpeg 需要直接路径，所以是真实路径而非 SAF URI）
+            </ThemedText>
+            <TextInput
+              style={[styles.input, { color: theme.text }]}
+              value={outputDir}
+              onChangeText={setOutputDir}
+              placeholder={DEFAULT_OUTPUT_DIR}
+              placeholderTextColor={theme.textSecondary}
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!busy}
+            />
+            <ThemedView style={styles.presetRow}>
+              {OUTPUT_DIR_PRESETS.map((preset) => (
+                <Pressable
+                  key={preset.path}
+                  onPress={() => setOutputDir(preset.path)}
+                  disabled={busy}
+                  style={({ pressed }) => pressed && styles.pressed}>
+                  <ThemedView
+                    type={outputDir === preset.path ? 'backgroundSelected' : 'backgroundElement'}
+                    style={styles.presetChip}>
+                    <ThemedText type="small">{preset.label}</ThemedText>
+                  </ThemedView>
+                </Pressable>
+              ))}
+            </ThemedView>
+          </ThemedView>
+
           {dir ? (
             <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
               目录：{dir}
@@ -414,6 +487,24 @@ export default function ConverterScreen() {
           ) : null}
 
           {busy ? <ActivityIndicator style={styles.indicator} /> : null}
+
+          {progress ? (
+            <ThemedView type="backgroundElement" style={styles.panel}>
+              <ThemedText type="small" themeColor="textSecondary">
+                正在合并 {progress.done + 1} / {progress.total}
+              </ThemedText>
+              <ThemedText type="smallBold" numberOfLines={1}>
+                {progress.label}
+              </ThemedText>
+              <Pressable
+                onPress={() => {
+                  cancelRef.current = true;
+                }}
+                style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}>
+                <ThemedText type="small">取消（当前项做完后停止）</ThemedText>
+              </Pressable>
+            </ThemedView>
+          ) : null}
 
           {items.length > 0 ? (
             <ThemedView type="backgroundElement" style={styles.panel}>
@@ -437,10 +528,14 @@ export default function ConverterScreen() {
             </ThemedView>
           ) : null}
 
-          {mergeOutcome && (mergeOutcome.ok.length > 0 || mergeOutcome.failed.length > 0) ? (
+          {mergeOutcome &&
+          (mergeOutcome.ok.length > 0 ||
+            mergeOutcome.skipped.length > 0 ||
+            mergeOutcome.failed.length > 0) ? (
             <ThemedView type="backgroundElement" style={styles.panel}>
               <ThemedText type="smallBold">
-                合并完成：成功 {mergeOutcome.ok.length} / 失败 {mergeOutcome.failed.length}
+                合并完成：成功 {mergeOutcome.ok.length} · 跳过 {mergeOutcome.skipped.length} · 失败{' '}
+                {mergeOutcome.failed.length}
               </ThemedText>
 
               {mergeOutcome.ok.map((p) => (
@@ -449,11 +544,36 @@ export default function ConverterScreen() {
                 </ThemedText>
               ))}
 
+              {mergeOutcome.skipped.map((p) => (
+                <ThemedText
+                  key={`skip-${p}`}
+                  type="small"
+                  themeColor="textSecondary"
+                  numberOfLines={1}>
+                  ↷ 已存在跳过：{p}
+                </ThemedText>
+              ))}
+
               {mergeOutcome.failed.map((f, i) => (
                 <ThemedText key={`fail-${i}-${f.label}`} type="small" numberOfLines={3}>
                   ✗ {f.label} —— {f.message}
                 </ThemedText>
               ))}
+
+              {mergeOutcome.skipped.length > 0 ? (
+                <ThemedText type="small" themeColor="textSecondary">
+                  （跳过的文件已存在；要重做请先删掉对应 mp4）
+                </ThemedText>
+              ) : null}
+
+              {mergeOutcome.failed.length > 0 ? (
+                <Pressable
+                  onPress={handleRetryFailed}
+                  disabled={busy}
+                  style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}>
+                  <ThemedText type="small">重试失败的 {mergeOutcome.failed.length} 项</ThemedText>
+                </Pressable>
+              ) : null}
             </ThemedView>
           ) : null}
 
@@ -525,5 +645,24 @@ const styles = StyleSheet.create({
   row: {
     gap: Spacing.half,
     paddingVertical: Spacing.one,
+  },
+  outputDirBlock: {
+    gap: Spacing.two,
+  },
+  input: {
+    borderRadius: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two,
+    fontSize: 14,
+    backgroundColor: 'rgba(127,127,127,0.12)',
+  },
+  presetRow: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+  },
+  presetChip: {
+    paddingVertical: Spacing.one,
+    paddingHorizontal: Spacing.three,
+    borderRadius: Spacing.three,
   },
 });

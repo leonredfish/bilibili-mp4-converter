@@ -148,6 +148,26 @@ async function ensureDir(path: string): Promise<void> {
   }
 }
 
+/** 输出文件名（不含目录）：与旧工具一致，`<P页码>_<分P标题或标题>.mp4` */
+function outputFileName(item: VideoItem): string {
+  return `${sanitize(`${item.page}_${item.part ?? item.title}`)}.mp4`;
+}
+
+/** 某个 item 在给定输出目录里的目标路径 */
+export function outputPathFor(item: VideoItem, outDir: string): string {
+  return `${outDir}/${outputFileName(item)}`;
+}
+
+/**
+ * 目标是否已存在。
+ *
+ * 供「已存在则跳过」策略使用：默认不覆盖已经合并好的文件——
+ * 避免一次误点把上次的成果冲掉；需要重做时删掉目标文件即可。
+ */
+export async function outputExists(item: VideoItem, outDir: string): Promise<boolean> {
+  return ReactNativeBlobUtil.fs.exists(outputPathFor(item, outDir));
+}
+
 /** 通知系统媒体库，否则新写入的 mp4 不会出现在相册/播放器里（尽力而为，失败不影响结果） */
 async function notifyMediaStore(path: string): Promise<void> {
   try {
@@ -173,8 +193,7 @@ export async function mergeToMp4(
   const media = await materializer.materialize(item);
   try {
     await ensureDir(outDir);
-    const fileName = sanitize(`${item.page}_${item.part ?? item.title}`);
-    const outPath = `${outDir}/${fileName}.mp4`;
+    const outPath = outputPathFor(item, outDir);
 
     const session = await FFmpegKit.execute(
       `-i "${media.video}" -i "${media.audio}" -c copy -y -- "${outPath}"`,

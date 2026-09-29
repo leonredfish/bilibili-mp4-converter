@@ -33,3 +33,11 @@ export async function mergeToMp4(
 ): Promise<string> {
   return '';
 }
+
+export function outputPathFor(_item: VideoItem, outDir: string): string {
+  return outDir;
+}
+
+export async function outputExists(_item: VideoItem, _outDir: string): Promise<boolean> {
+  return false;
+}
