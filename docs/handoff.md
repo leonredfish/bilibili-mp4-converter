@@ -201,6 +201,20 @@ scripts/patch-gradle-mirrors.js   国内构建补丁（postinstall）
 | 滚动 | uiautomator 只 dump **可见**节点，按钮在下方时要先 `input swipe` 滚下去 |
 | 审查 `adb logcat` | 输出极吵，用 `-s <TAG>` 精确过滤，别用宽 grep |
 | 恢复 Shizuku（13.6+） | `adb shell /data/app/~~.../moe.shizuku.privileged.api-.../lib/arm64/libshizuku.so`（**不再是 start.sh**）。也可在 Shizuku App 里点「启动」 |
+| **dev-client 红屏**（堆栈含 `loadJSBundleFromAssets` / `JSBundleLoader.kt`） | App 没走 Metro，退回了 APK 内置 bundle（debug 包没有）。**USB + `adb reverse` 最稳**，见下方代码块。⚠️ **设备断开重连后 `adb reverse` 会丢，必须重设** |
+| 想确认「红屏到底是代码问题还是连接问题」 | 让 Metro 真编一次 Android bundle：**200 就说明代码没问题**，红屏纯属连接。⚠️ 入口必须是 `expo-router/entry`，写成 `./index` 会 404（`UnableToResolveError`），别被它误导 |
+
+```bash
+# dev-client 连不上 Metro（红屏 loadJSBundleFromAssets）时的标准修法
+adb reverse tcp:8081 tcp:8081
+adb shell am force-stop com.leonredfish.bilibilimp4
+adb shell am start -a android.intent.action.VIEW \
+  -d "bilibilimp4://expo-development-client/?url=http%3A%2F%2Flocalhost%3A8081"
+
+# 自检：Metro 能否打包（200 = 能，说明红屏纯属连接问题）
+curl -o /dev/null -w '%{http_code}\n' \
+  'http://localhost:8081/node_modules/expo-router/entry.bundle?platform=android&dev=true'
+```
 
 ### 环境限制
 
