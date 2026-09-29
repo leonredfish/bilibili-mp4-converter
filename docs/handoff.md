@@ -1,4 +1,4 @@
-# 交接提示词 —— Bilibili MP4 Converter（从 M3 继续）
+# 交接提示词 —— Bilibili MP4 Converter（从 M5 继续）
 
 > 用法：在工作电脑上 `git pull`，然后把本文全文作为提示词交给 pi。
 > 本文是**自包含**的：假设你（接手的 agent）对本项目一无所知。
@@ -7,8 +7,13 @@
 
 ## 0. 你的任务
 
-接管一个进行中的 Android 项目，**从 M3 继续做**。项目已推到 GitHub，工作区干净。
-先读完本文，再动手。**不要重做已完成的里程碑。**
+接管一个进行中的 Android 项目，**从 M5 继续做**。项目已推到 GitHub，工作区干净。
+先读完本文，再动手。
+
+**M0–M4 与两轮 UI 重构都已完成**，功能主链路已在真机跑通：
+Shizuku 扫描 → 搬运 → FFmpeg 合并 → 产出可播放 mp4 → 媒体库可见。
+所以 M5 不再是「让它能跑」，而是「让它可长期维护」（工程化 + 库收尾）。
+**不要重做已完成的里程碑。**
 
 ---
 
@@ -54,22 +59,40 @@ B 站缓存固定在 `/storage/emulated/0/Android/data/tv.danmaku.bili/download/
 所以即使 Shizuku 装好授权好，**FFmpeg 依然读不到 `/Android/data/...`**。
 
 → Shizuku 只能承担「**把文件搬出来**」，合并必须走「先提取 → 再 FFmpeg」。
-这正是 M3 要补的步骤。
+（这正是 M3 做掉的事：`lib/materializer.ts` + `lib/shizuku-materializer.ts`。）
 
 ---
 
 ## 3. 目录结构
 
-```
+```text
 src/
-  app/index.tsx              唯一页面（含临时「诊断面板」，M4 要替换成正式 UI）
+  app/
+    _layout.tsx               根布局（主题 + Stack）
+    index.tsx                 唯一页面：**本体是 FlatList**（条目虚拟化），其余区块走 ListHeader/Footer
+  components/
+    shizuku-panel.tsx         Shizuku 状态机按钮 + 状态/本机适用性
+    source-actions.tsx        权限 + 两个扫描 + 手动选择（各带备注）
+    output-dir-picker.tsx     输出目录 + 预设 chip
+    video-row.tsx             条目行（FlatList 的 renderItem）
+    merge-panel.tsx           MergeProgressPanel / MergeActionBar / MergeResultPanel
+    action-button.tsx         统一按钮变体（primary/secondary/permission/merge）
+    themed-text.tsx 等        主题化基础组件
+  hooks/
+    use-converter.ts          页面状态 + **全部编排逻辑**（handler 集中在此）
+    use-theme.ts / use-color-scheme*.ts / use-resolved-color-scheme.ts
+  constants/
+    theme.ts                  颜色 / 间距
+    all-files-access.ts       各 ROM 的「所有文件访问权限」入口表 + resolver
+  stores/theme-store.ts       Zustand（主题）
   lib/
-    bilibili.ts              扫描 + 合并主逻辑（扫描接受 FsAdapter）
-    fs-adapter.ts            FS 抽象接口（exists/ls/stat/readText）
-    blob-fs.ts               App 自身权限实现（react-native-blob-util）
-    shizuku-fs.ts            shell/root 身份实现（react-native-shizuku）
-    bilibili.web.ts          Web 降级
-  components/  constants/  hooks/  stores/
+    bilibili.ts               扫描 + 合并主逻辑（扫描接受 FsAdapter）
+    fs-adapter.ts             FS 抽象 + Android 版本判定
+    blob-fs.ts                App 自身权限（react-native-blob-util）
+    shizuku-fs.ts             shell 身份（react-native-shizuku）
+    materializer.ts           「把 m4s 变成 FFmpeg 可读路径」策略 + 直通实现
+    shizuku-materializer.ts   用 Shizuku 把 m4s 搬到中转目录
+    bilibili.web.ts           Web 降级
 modules/react-native-shizuku/     仓库内本地库（纯 RN，零 expo 依赖）
   src/                            公开 JS API
   android/src/main/aidl/          IShizukuFileService.aidl + 2 个 Parcelable
@@ -91,16 +114,29 @@ scripts/patch-gradle-mirrors.js   国内构建补丁（postinstall）
 | **M2** | `FsAdapter` 抽象 + `blobFs`/`shizukuFs`，扫描逻辑零改动地支持两种权限来源 | `c7b8652` |
 | P1-上游 | 扫描同时校验 `video.m4s` 与 `audio.m4s` | `e0907c8` |
 | P1-下游 | 合并逐项容错（不再「一失败全丢」） | `3fe39b4` |
+| **M3** | materialize：库加 `getExternalCacheDir()`；`mergeToMp4` 先搬运再 FFmpeg；`finally` 清理 + `scanFile` 通知媒体库。真机产出 **31 个 mp4（5.9G）** | `dcb5e31` |
+| 扫描分流 | 扫描入口按 Android 版本分流（≤ 10 用 app 权限 + 运行时存储权限；11+ 只能走 Shizuku）+ 各按钮「本机适用性」备注 | `ca16d3f` |
+| **M4** | 正式 UI：M0 诊断面板下线、批次进度/取消、失败项重试、输出目录可配置、「已存在则跳过」（不再 `-y` 盲目覆盖） | `6bfd7f2` |
+| **A4** | 拆 `app/index.tsx`：668 → 115 行（hook + 5 组件 + 常量表） | `ba27b25` |
+| **A5** | 条目列表虚拟化：页面本体改 `FlatList`，其余区块走 ListHeader / ListFooter | `266f729` |
+| handoff 自身 | 补 dev-client 连不上 Metro 的坑 + 自检法 | `3a0d96d` |
 
 ### 真机已验证的事实（可作为你的前提）
 
+> ⚠️ **计数会变**（缓存会被增删，别把它当常量）：下面是**当时**的记录；
+> 截至最后一次验证，当前源目录是 **19 个** entry.json / 19 video.m4s / 19 audio.m4s。
+> 拿不准时先 `adb shell find … -name entry.json | wc -l` 取地面真相。
+
 - `Shizuku.getStatus()` → `ready`；`not-running` 与 binder 死亡/恢复**双向事件**均生效
 - `exec("id")` → **`uid=2000(shell)`**
-- `listDir('/sdcard/Android/data/tv.danmaku.bili/download')` → **31 项**（adb 地面真相：31 个 entry.json / 31 个 video.m4s / 31 个 audio.m4s，缓存合计 5.9 GB，单条 1080P ≈450 MB）
+- `listDir(缓存目录)` / `scanDirectory(缓存目录, shizukuFs)` → 与 adb 地面真相**逐次一致**
+  （曾 31 项，现 19 项；均核对过）
 - `readTextFile` 能正确读出 entry.json 的中文标题
-- **`copyFile` 能写入 App 私有外部目录** → 这是 M3 的基础，已实测
-- `scanDirectory(缓存目录, shizukuFs)` → **找到 31 个视频**
-- 合并 31 个（源在 /Android/data、FFmpeg 读不到）→ 汇总「成功 0 / 失败 31」，**批次不中断**
+- **`copyFile` 能写入 App 私有外部目录** → M3 的基础，已实测
+- **M3 端到端**：全量合并 → `/storage/emulated/0/Movies/` 产出 31 个 mp4（合计 5.9G）；
+  文件头合法（`ftyp isom … mp41`）；**中转目录合并后自动清空**；MediaStore 可查到（相册可见）
+- **M4 的「已存在则跳过」**：再点合并 → 「成功 0 · 跳过 19 · 失败 0」，Movies 数量不变（未覆盖任何文件）
+- **A5 虚拟化后**：header / 条目卡片 / footer（合并按钮、结果面板）均正常；合并流程可用
 
 ---
 
@@ -134,51 +170,43 @@ scripts/patch-gradle-mirrors.js   国内构建补丁（postinstall）
 
 ---
 
-## 7. 你的主要任务：M3
+## 7. 你的主要任务：M5（工程化 + 库收尾）
 
-**目标：第一次产出真实可播放的 mp4。**
+主链路已跑通，M5 的目标是「让它可长期维护」。按价值排序：
 
-1. **拿到临时目录**
-   库新增 `getExternalCacheDir()`（或等效 API），返回 App 的**外部私有目录**：
-   `/storage/emulated/0/Android/data/com.leonredfish.bilibilimp4/cache/`
-   —— 选它的原因：**shell 可写、App 可读**（M1 已实测）；App 内部私有目录（`/data/data/...`）shell 写不进去。
-2. **materialize 步骤**
-   合并前用 Shizuku `copyFile` 把该视频的 `video.m4s` + `audio.m4s` 搬到临时目录，得到 App 可读路径。
-   建议设计：`materialize(item): Promise<{ video: string; audio: string }>`，与 FsAdapter 同样保持「可替换」的边界。
-3. **改造 `mergeToMp4`**
-   先 materialize，再把可读路径喂给 FFmpegKit。单条中转 ≈450MB，注意耗时与空间。
-4. **清理**
-   成功**和失败**都要删临时文件（放 `finally`）。
-5. **媒体库通知**
-   合并成功后调用 `ReactNativeBlobUtil.fs.scanFile()`，否则 mp4 不会出现在相册/播放器里。
-6. **真机端到端验证**
-   产出可播放 mp4。这也会**自然覆盖 P1-1 尚未直接验证的「成功项被保留」那一半**（当前 0 个成功）。
+#### A. 工程化
+
+- 清理 **8 个 0 引用**的模板依赖（已 grep 核对：`src/` 与 `modules/` 里均无引用）：
+  `@expo/ui`、`expo-glass-effect`、`expo-symbols`、`expo-web-browser`、`expo-device`、
+  `expo-constants`、`expo-font`、`expo-system-ui`。
+  ⚠️ 顺带发现 `expo-linking` / `expo-status-bar` 也是 0 引用 —— 删之前逐个
+  `grep -rn "<pkg>" src/ modules/ app.json` 复核，**删完必须真机重启验证一次**。
+- 抽掉硬编码 `APP_PACKAGE`（现在硬编码在 `hooks/use-converter.ts`，仅用于
+  「授予所有文件访问权限」的 intent data）。
+- **纯函数单测**：`decodeDirectoryUri`、`scanForEntries`（注入假 FsAdapter）、`outputPathFor`。
+  仓库现在**没有任何测试，也没有 CI**。
+- 扫描性能：一次全量 ≈**220 次串行 Binder IPC**（每条目约 11 次）。若体感慢，
+  在 AIDL 加**批量接口**（新增方法要追加事务码 + 递增 `USER_SERVICE_VERSION`，见 §6）。
+- Android 10 边界：README 已如实标注「未实测」，有 Android 10 真机时补测。
+
+#### B. 库自身（`modules/react-native-shizuku`）
+
+- 补未验证分支：`not-installed` / `no-permission` / `requestPermission` 弹窗
+- 事件回调里顺带刷新 `shizukuInfo`（现在只在初次挂载与授权后拉）
+- （可选）真 TurboModule spec + codegen（当前是 legacy module + interop）
+- **迁出为独立仓库**（用户既定计划：先仓库内跑通，现已跑通 —— 见 §10）
 
 ---
 
-## 8. 之后（M4 与收尾）
+## 8. 风险（需持续关注）
 
-**M4 · 正式 UI**
-- 三个按钮：`授予「所有文件访问权限」`（原）｜`用 Shizuku 读取 B 站缓存`（新，状态机驱动）｜`手动选择目录`（B 兜底，先导出到公共目录再处理）
-- **替换掉 `src/app/index.tsx` 里的临时「M0 诊断」面板**（含 `Shizuku 扫描 B 站缓存` 按钮与残留自检文本）
-- 进度 + 取消（长批次）；输出已存在时的策略（现在一律 `-y` 覆盖）；失败项重试入口
-- 输出目录可配置（README 点名）
-
-**工程化**
-- 清理 **8 个 0 引用**的模板依赖：`@expo/ui`、`expo-glass-effect`、`expo-symbols`、`expo-web-browser`、`expo-device`、`expo-constants`、`expo-font`、`expo-system-ui`
-- 抽掉硬编码 `APP_PACKAGE`；纯函数单测（`decodeDirectoryUri`、扫描）+ CI
-- 扫描性能：一次全量 ≈**220 次串行 Binder IPC**；若体感慢，在 AIDL 加批量接口
-
-**库自身**
-- 补未验证分支：`not-installed` / `no-permission` / `requestPermission` 弹窗
-- 事件回调里顺带刷新 `shizukuInfo`
-- （可选）真 TurboModule spec + codegen（当前 legacy + interop）
-- **迁出为独立仓库**（用户的既定计划：先仓库内跑通，再抽独立 repo）
-
-**风险**
-- Android 16 / 新版 Play 系统更新可能让 **Shizuku 也读不到 `/Android/data`**（上游 issue #1574 / #1807）——需监控
-- Google Play 政策：`MANAGE_EXTERNAL_STORAGE` 若上架需处理（侧载安装无碍）
-- 空间：提取中转会临时多占单视频体积
+- Android 16 / 新版 Play 系统更新可能让 **Shizuku 也读不到 `/Android/data`**
+  （上游 issue #1574 / #1807）——这会让整个方案失效，需监控
+- Google Play 政策：`MANAGE_EXTERNAL_STORAGE` 上架需专门申报（侧载安装无碍）
+- **输出目录**写公共目录（`/storage/emulated/0/Movies` 等）在 Android 11+ 需要
+  「所有文件访问权限」，而部分 ROM（如 ColorOS）该开关入口很深。若换 ROM / 要上架，
+  这里要么改用 SAF 选输出目录，要么写到 App 自己可写的目录
+- 空间：提取中转会临时多占「单条视频体积」（单条 1080P ≈450MB）
 
 ---
 
@@ -225,7 +253,9 @@ curl -o /dev/null -w '%{http_code}\n' \
 
 ## 10. 需要用户拍板的点
 
-1. **M3 的临时目录**：App 外部私有目录（**推荐**，已实测可写）还是公共目录？
-2. **工作电脑能否连真机？** M3 必须真机验证（需要已装并激活 Shizuku 的手机）。
-   若不能连，建议先做不依赖真机的部分（M4 的 UI 改造、工程化清理），真机验证留回本地。
-3. **独立仓库时机**：建议 M4 之后。
+1. ~~M3 的临时目录~~ → **已定**：App 外部私有目录（已实测 shell 可写 / App 可读）。
+2. ~~工作电脑能否连真机~~ → **已解决**：USB + `adb reverse`（见 §9；
+   **设备重连后要重设**）。
+3. **独立仓库时机**：功能已跑通，建议 M5 的「库自身」部分做完后就抽。
+4. **`APP_PACKAGE` 怎么抽**：读 `Application.applicationId`（需加 `expo-application` 依赖）
+   还是从 `app.json` 经 `expo-constants` 读（但 `expo-constants` 正在待清理名单里）？
