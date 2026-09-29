@@ -116,9 +116,10 @@ scripts/patch-gradle-mirrors.js   国内构建补丁（postinstall）
 | P1-下游 | 合并逐项容错（不再「一失败全丢」） | `3fe39b4` |
 | **M3** | materialize：库加 `getExternalCacheDir()`；`mergeToMp4` 先搬运再 FFmpeg；`finally` 清理 + `scanFile` 通知媒体库。真机产出 **31 个 mp4（5.9G）** | `dcb5e31` |
 | 扫描分流 | 扫描入口按 Android 版本分流（≤ 10 用 app 权限 + 运行时存储权限；11+ 只能走 Shizuku）+ 各按钮「本机适用性」备注 | `ca16d3f` |
-| **M4** | 正式 UI：M0 诊断面板下线、批次进度/取消、失败项重试、输出目录可配置、「已存在则跳过」（不再 `-y` 盲目覆盖） | `6bfd7f2` |
+| **M4** | 正式 UI：M0 诊断面板下线、批次进度/取消、失败项重试、输出目录可配置、「已存在则跳过」（不再 `-y` 盲目覆盖；B4 起改为可切换） | `6bfd7f2` |
 | **A4** | 拆 `app/index.tsx`：668 → 115 行（hook + 5 组件 + 常量表） | `ba27b25` |
 | **A5** | 条目列表虚拟化：页面本体改 `FlatList`，其余区块走 ListHeader / ListFooter | `266f729` |
+| **B4** | 输出已存在策略三选一（跳过 / 覆盖 / 重命名）+ 抽出 `ChipRow`；修掉 `mergeToMp4` 参数被同名 `const` 遮蔽的坑 | `05bd8cb` |
 | handoff 自身 | 补 dev-client 连不上 Metro 的坑 + 自检法 | `3a0d96d` |
 
 ### 真机已验证的事实（可作为你的前提）
@@ -136,6 +137,10 @@ scripts/patch-gradle-mirrors.js   国内构建补丁（postinstall）
 - **M3 端到端**：全量合并 → `/storage/emulated/0/Movies/` 产出 31 个 mp4（合计 5.9G）；
   文件头合法（`ftyp isom … mp41`）；**中转目录合并后自动清空**；MediaStore 可查到（相册可见）
 - **M4 的「已存在则跳过」**：再点合并 → 「成功 0 · 跳过 19 · 失败 0」，Movies 数量不变（未覆盖任何文件）
+- **B4 三种输出策略**（源目录临时只留 1 条 ~450MB 来跑，避免 19 条全量；测完已还原）：
+  跳过 → 「成功 0 · 跳过 1」且文件系统**无写入**；覆盖 → 「成功 1」+ 默认文件 mtime 更新、不产生新文件；
+  重命名 → 先生成 `…！ (2).mp4`，再跑一次生成 `…！ (3).mp4`（**logcat 里 FFmpeg 实际写入的路径与 UI 显示一致**）；
+  三者产物都是 449,561,710 字节的合法 MP4。
 - **A5 虚拟化后**：header / 条目卡片 / footer（合并按钮、结果面板）均正常；合并流程可用
 
 ---
@@ -150,6 +155,8 @@ scripts/patch-gradle-mirrors.js   国内构建补丁（postinstall）
 | 独立构建读不到主工程镜像 | RN / expo 的 Gradle 插件是 **included build**，需单独打镜像（脚本已覆盖） |
 | `android/` 是生成的 | 每次 prebuild 后跑 `npm run patch:gradle` |
 | 构建产物 | `.gitignore` 已排除 `modules/*/android/build` 等，**别提交构建产物** |
+| 块内 `const` 遮蔽同名参数 | `mergeToMp4` 里既声明了参数 `outPath`、又在函数体内写了 `const outPath = outputPathFor(...)`，参数被静默遮蔽 → `resolveOutputPath()` 算好的重命名路径被丢弃。**tsc / eslint / expo lint 全绿**，只有真机才暴露。关键参数别给默认值、直接改必填，让漏传变成编译错误 |
+| `adb shell input swipe` 会误触按钮 | 滑动起点若压在按钮上，会触发该按钮的 press（实测在合并按钮上误触发了多次合并，造成「幽灵写入」并误导排查方向）。滚长列表时把起点放到 `x=1000` 之类空白处 |
 | 阿里云镜像有 Shizuku AAR | `dev.rikka.shizuku:api` / `:provider` 13.1.5 可正常解析 |
 
 ---
