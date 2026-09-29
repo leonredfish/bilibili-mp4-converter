@@ -120,6 +120,7 @@ scripts/patch-gradle-mirrors.js   国内构建补丁（postinstall）
 | **A4** | 拆 `app/index.tsx`：668 → 115 行（hook + 5 组件 + 常量表） | `ba27b25` |
 | **A5** | 条目列表虚拟化：页面本体改 `FlatList`，其余区块走 ListHeader / ListFooter | `266f729` |
 | **B4** | 输出已存在策略三选一（跳过 / 覆盖 / 重命名）+ 抽出 `ChipRow`；修掉 `mergeToMp4` 参数被同名 `const` 遮蔽的坑 | `05bd8cb` |
+| **C1** | 输出设置持久化（Zustand + persist → AsyncStorage，收 `outputDir` + `outputStrategy`）；输出目录补「用系统选择器选目录」入口（SAF tree URI → `decodeDirectoryUri()` → 真实路径） | `a7f01b2` `6600048` |
 | handoff 自身 | 补 dev-client 连不上 Metro 的坑 + 自检法 | `3a0d96d` |
 
 ### 真机已验证的事实（可作为你的前提）
@@ -141,6 +142,13 @@ scripts/patch-gradle-mirrors.js   国内构建补丁（postinstall）
   跳过 → 「成功 0 · 跳过 1」且文件系统**无写入**；覆盖 → 「成功 1」+ 默认文件 mtime 更新、不产生新文件；
   重命名 → 先生成 `…！ (2).mp4`，再跑一次生成 `…！ (3).mp4`（**logcat 里 FFmpeg 实际写入的路径与 UI 显示一致**）；
   三者产物都是 449,561,710 字节的合法 MP4。
+- **C1 输出设置持久化**：点「Download」预设 +「覆盖」→ `force-stop` 后重新拉起 → 仍是
+  `/storage/emulated/0/Download` + 覆盖；地面真相 `run-as … cat databases/RKStorage` 内含
+  `converter-settings` 键（值为 `"outputStrategy":"overwrite"`）
+- **C1-SAF 输出目录入口**（Android 15）：起系统 `com.android.documentsui/.picker.PickActivity`
+  → 存储根提示「无法使用此文件夹」（11+ 不允许授权整个存储根，符合预期）→ 进 DCIM →
+  「使用此文件夹」→ 系统确认框「要允许……访问 DCIM 中的文件吗？」→ 输入框得到
+  `/storage/emulated/0/DCIM`（tree URI 正确解码为真实路径）；**按返回取消则值不变**
 - **A5 虚拟化后**：header / 条目卡片 / footer（合并按钮、结果面板）均正常；合并流程可用
 
 ---
@@ -157,6 +165,8 @@ scripts/patch-gradle-mirrors.js   国内构建补丁（postinstall）
 | 构建产物 | `.gitignore` 已排除 `modules/*/android/build` 等，**别提交构建产物** |
 | 块内 `const` 遮蔽同名参数 | `mergeToMp4` 里既声明了参数 `outPath`、又在函数体内写了 `const outPath = outputPathFor(...)`，参数被静默遮蔽 → `resolveOutputPath()` 算好的重命名路径被丢弃。**tsc / eslint / expo lint 全绿**，只有真机才暴露。关键参数别给默认值、直接改必填，让漏传变成编译错误 |
 | `adb shell input swipe` 会误触按钮 | 滑动起点若压在按钮上，会触发该按钮的 press（实测在合并按钮上误触发了多次合并，造成「幽灵写入」并误导排查方向）。滚长列表时把起点放到 `x=1000` 之类空白处 |
+| 同一批并行下发 `write` + `edit` 时，诊断可能是陈旧快照 | 新写一个文件、同时又改引用它的文件时，pi-lens 的诊断是按**写入前**的版本算的，会报「Property 'onPick' does not exist」之类的 🔴。用 `npx tsc --noEmit`（exit 0）复核后再判断，别急着改代码 |
+| 屏幕熄灭时 `mCurrentFocus` 会骗人 | 设备闲置后 dump 出来的是锁屏时钟，`dumpsys window \| grep mCurrentFocus` 也可能是 `NotificationShade`。用 `dumpsys activity activities \| grep ResumedActivity` 确认前台到底是不是本 App；必要时先 `input keyevent KEYCODE_WAKEUP` |
 | 阿里云镜像有 Shizuku AAR | `dev.rikka.shizuku:api` / `:provider` 13.1.5 可正常解析 |
 
 ---
