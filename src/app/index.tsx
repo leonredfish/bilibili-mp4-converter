@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Linking,
+  PermissionsAndroid,
   Platform,
   Pressable,
   ScrollView,
@@ -23,6 +24,7 @@ import {
   scanDirectory,
   type VideoItem,
 } from '@/lib/bilibili';
+import { ANDROID_API_LEVEL, NEEDS_SHELL_FOR_APP_DATA } from '@/lib/fs-adapter';
 import { passthroughMaterializer, type Materializer } from '@/lib/materializer';
 import { createShizukuMaterializer } from '@/lib/shizuku-materializer';
 import { shizukuFs } from '@/lib/shizuku-fs';
@@ -43,6 +45,75 @@ type MergeOutcome = {
   ok: string[];
   failed: { label: string; message: string }[];
 };
+
+/**
+ * 各厂商 ROM 里「所有文件访问权限」的手动入口。
+ *
+ * 这个权限是**特殊权限**：没有运行时弹窗，只能去设置里手动开；而各家 ROM 的入口
+ * 位置差别很大（有的在「隐私保护」下，有的在「应用管理」里），所以按厂商给一条
+ * 具体路径，而不是列一大串。完整对照表见 README。
+ *
+ * 来源：华为官方支持页、小米/OPPO 开发者文档、以及各 ROM 的实际设置层级。
+ */
+const ALL_FILES_ACCESS_ENTRIES: { match: RegExp; label: string; path: string }[] = [
+  {
+    match: /xiaomi|redmi|poco/i,
+    label: '小米/红米/POCO',
+    path: '设置 → 隐私保护 → 特殊权限设置 → 所有文件访问权限',
+  },
+  {
+    match: /huawei|honor/i,
+    label: '华为/荣耀',
+    path: '设置 → 应用和服务 → 应用管理 → 本 App → 权限 → 媒体和文件 → 所有文件',
+  },
+  {
+    match: /oppo|oneplus|realme|heytap/i,
+    label: 'OPPO/一加/realme',
+    path: '设置 → 隐私 → 权限管理器 → 文件 → 查看更多可以访问所有文件的应用',
+  },
+  {
+    match: /samsung/i,
+    label: '三星',
+    path: '设置 → 应用程序 → 本 App → 权限 → 文件和媒体 → 允许管理所有文件',
+  },
+];
+
+const GENERIC_ALL_FILES_ACCESS_ENTRY = {
+  label: '通用',
+  path: '设置 → 应用 → 特殊应用权限 → 所有文件访问权限',
+};
+
+/** 按本机厂商选一条具体路径；认不出厂商时退回通用入口 */
+function resolveAllFilesAccessEntry(): { label: string; path: string } {
+  // SAFETY: RN 的 `Platform.constants` 在 Android 运行时确实带有 Manufacturer 字段，
+  // 但它的 TS 类型（PlatformConstants）并未声明该字段。这里只读取一个**可选**字符串，
+  // 读不到（包括非 Android 平台）就退化为空串，由下面的回退逻辑处理。
+  const constants = Platform.constants as unknown as { Manufacturer?: string } | undefined;
+  const manufacturer = String(constants?.Manufacturer ?? '');
+  return (
+    ALL_FILES_ACCESS_ENTRIES.find((entry) => entry.match.test(manufacturer)) ??
+    GENERIC_ALL_FILES_ACCESS_ENTRY
+  );
+}
+
+const ALL_FILES_ACCESS_ENTRY = resolveAllFilesAccessEntry();
+
+/**
+ * Android ≤10 专用：读 `/Android/data/<其他 App>/` 需要运行时 `READ_EXTERNAL_STORAGE`。
+ *
+ * 这条链此前只在 manifest 里声明了该权限、**从未在运行时申请**，因此在 ≤10 上同样
+ * 必然失败（表现就是「未找到缓存」）。任何异常一律当作「未授权」。
+ */
+async function requestLegacyStoragePermission(): Promise<boolean> {
+  try {
+    const result = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
+    );
+    return result === PermissionsAndroid.RESULTS.GRANTED;
+  } catch {
+    return false;
+  }
+}
 
 export default function ConverterScreen() {
   const [dir, setDir] = useState('');
@@ -136,25 +207,42 @@ export default function ConverterScreen() {
     try {
       const found = await scanDirectory(path);
       setItems(found);
-      // 手动选择的是公共目录，源文件本来就 App 可读 → 直通，不做搬运
+      // 本函数只服务 blobFs 场景（≤10 的默认目录 / 手动选的公共目录）：
+      // 源文件本来就 App 可读，直接喂给 FFmpeg 即可，无需搬运。
       setMaterializer(passthroughMaterializer);
       if (found.length === 0) {
-        setError('未找到缓存。请确认已授予「所有文件访问权限」，且缓存位于所选目录。');
+        setError('该目录下未找到 B 站缓存（需要 entry.json + video.m4s + audio.m4s）。');
       }
     } catch (e) {
-      setError(`${e instanceof Error ? e.message : String(e)}（请确认已授予「所有文件访问权限」）`);
+      setError(`读取目录失败：${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setBusy(false);
     }
   };
 
-  const handleScanDefault = () => {
+  const handleScanDefault = async () => {
     if (Platform.OS === 'web') {
       setError('目录选择与转码仅支持 Android，请在真机或模拟器上运行');
       return;
     }
+
+    // Android 11+：普通权限读不到 /Android/data，给出正确指引，而不是做一次注定失败的扫描
+    if (NEEDS_SHELL_FOR_APP_DATA) {
+      setError(
+        `本机 Android API ${ANDROID_API_LEVEL}（11+）：系统禁止普通 App 读取其他 App 的 ` +
+          '/Android/data/，请改用「Shizuku 扫描 B 站缓存」。',
+      );
+      return;
+    }
+
+    // Android ≤10：需要运行时存储读取权限（见 requestLegacyStoragePermission 注释）
+    if (!(await requestLegacyStoragePermission())) {
+      setError('未授予存储读取权限，无法读取 /Android/data 下的 B 站缓存。');
+      return;
+    }
+
     setDir(DEFAULT_BILIBILI_CACHE_DIR);
-    void runScan(DEFAULT_BILIBILI_CACHE_DIR);
+    await runScan(DEFAULT_BILIBILI_CACHE_DIR);
   };
 
   const handlePick = async () => {
@@ -265,6 +353,14 @@ export default function ConverterScreen() {
               <ThemedText type="small">Shizuku 扫描 B 站缓存</ThemedText>
             </Pressable>
 
+            <ThemedText type="small" themeColor="textSecondary">
+              {NEEDS_SHELL_FOR_APP_DATA
+                ? `✅ 本机（Android API ${ANDROID_API_LEVEL}）适用。`
+                : `本机（Android API ${ANDROID_API_LEVEL}）非必需，用「扫描 B 站缓存目录」即可。`}
+              {'\n'}适用于 Android 11 及以上（需 Shizuku 已装并激活）；以 shell 身份读取，是 11+
+              读 /Android/data/ 的唯一途径。
+            </ThemedText>
+
             {shizukuResult ? (
               <ThemedText type="small" themeColor="textSecondary">
                 {shizukuResult}
@@ -280,15 +376,25 @@ export default function ConverterScreen() {
           </Pressable>
 
           <ThemedText type="small" themeColor="textSecondary">
-            注意：本 App 的「权限」页是空的（它只申请「所有文件访问权限」这类特殊权限，不占用普通运行时权限），别去 应用 → Bilibili MP4 → 权限，那里没有任何可点的项。正确入口：设置 → 应用 → 特殊应用权限（部分机型叫「权限管理」/「其他权限」）→ 所有文件访问权限 → 打开 Bilibili MP4 的开关。
+            特殊权限，无运行时弹窗，需手动开（App 内「权限」页里没有它）。{'\n'}
+            {ALL_FILES_ACCESS_ENTRY.label}：{ALL_FILES_ACCESS_ENTRY.path}
+            {'\n'}路径不符就在设置里搜「所有文件」。
           </ThemedText>
 
           <Pressable
-            onPress={handleScanDefault}
+            onPress={() => void handleScanDefault()}
             disabled={busy}
             style={({ pressed }) => [styles.button, pressed && styles.pressed]}>
             <ThemedText style={styles.buttonText}>扫描 B 站缓存目录</ThemedText>
           </Pressable>
+
+          <ThemedText type="small" themeColor="textSecondary">
+            {NEEDS_SHELL_FOR_APP_DATA
+              ? `⚠️ 本机（Android API ${ANDROID_API_LEVEL}）不适用 —— 请改用「Shizuku 扫描 B 站缓存」。`
+              : `✅ 本机（Android API ${ANDROID_API_LEVEL}）适用，首次会申请存储读取权限。`}
+            {'\n'}适用于 Android 10 及以下。Android 11 起系统禁止普通 App 读取其他 App 的
+            /Android/data/，11+ 只能走 Shizuku。
+          </ThemedText>
 
           <Pressable
             onPress={handlePick}
@@ -296,6 +402,10 @@ export default function ConverterScreen() {
             style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}>
             <ThemedText type="small">手动选择目录</ThemedText>
           </Pressable>
+
+          <ThemedText type="small" themeColor="textSecondary">
+            所有版本通用。适用于缓存已导出到公共目录（如 Download/）的情况，不依赖任何特殊权限。
+          </ThemedText>
 
           {dir ? (
             <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
