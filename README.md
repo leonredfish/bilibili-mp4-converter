@@ -7,7 +7,7 @@
 ## 技术栈
 
 | 类别 | 选择 |
-|------|------|
+| --- | --- |
 | 框架 | Expo SDK 57（React Native 0.86 / New Architecture） |
 | 语言 | TypeScript |
 | 路由 | expo-router |
@@ -25,7 +25,7 @@ B 站缓存的每个视频是「分离的 DASH 分片」：
 
 合并只需**流拷贝（remux）**，无需重编码，所以用 FFmpeg 的 `-c copy`：
 
-```
+```bash
 ffmpeg -i video.m4s -i audio.m4s -c copy 输出.mp4
 ```
 
@@ -61,13 +61,25 @@ npx expo run:android
 
 脚本可用环境变量覆盖（见脚本头部注释）：`GRADLE_DIST_MIRROR`、`MAVEN_MIRRORS`、`JAVA17_HOME`、`SKIP_GRADLE_PATCH=1`。国内网络建议直接把 `JAVA_HOME` 指向 JDK 17，一劳永逸。
 
-首次运行后，需要在系统设置里授予 **「所有文件访问权限」**（`MANAGE_EXTERNAL_STORAGE`）。
-注意入口是 **设置 → 应用 → 特殊应用权限（部分机型叫「权限管理」/「其他权限」）→ 所有文件访问权限**，
-而**不是** App 自己的「权限」页——那一页是空的（本 App 只用特殊权限，不占用普通运行时权限）。
+首次运行后，需要在系统设置里**手动**授予 **「所有文件访问权限」**（`MANAGE_EXTERNAL_STORAGE`）。
+它是**特殊权限**：没有运行时弹窗，也不在 App 自己的「权限」页里。各 ROM 入口不同
+（App 内会按本机厂商只显示对应的一条）：
+
+| ROM | 手动开启路径 |
+| --- | --- |
+| 小米 / 红米 / POCO | 设置 → 隐私保护 → 特殊权限设置 → 所有文件访问权限 |
+| 华为 / 荣耀 | 设置 → 应用和服务 → 应用管理 → 本 App → 权限 → 媒体和文件 → 所有文件 |
+| **OPPO / 一加 / realme** | **设置 → 隐私 → 权限管理器 → 文件 → 查看更多可以访问所有文件的应用**（在列表里找到本 App） |
+| 三星 | 设置 → 应用程序 → 本 App → 权限 → 文件和媒体 → 允许管理所有文件 |
+| 原生 / 其它 | 设置 → 应用 → 特殊应用权限 → 所有文件访问权限 |
+
+> ✅ **OPPO / 一加 / realme 这一行是在真机（OnePlus / ColorOS）实测过的**；
+> 其余几行来自各厂商官方文档或社区指南，**未逐台实测**（入口位置常随 ROM 版本变化），
+> 仅作参考——路径不符时请在设置里搜索「所有文件」。
 
 ## 目录结构
 
-```
+```text
 src/
   app/             # expo-router 页面（_layout 根布局、index 主界面）
   lib/             # 核心逻辑（bilibili.ts：解码 URI、扫描、合并）
@@ -77,19 +89,45 @@ src/
   constants/       # 主题色、间距等
 ```
 
-## 已知限制
+## Android 版本支持
 
-**Android 11+ 读不到 B 站缓存目录。** 出于隐私保护，Android 11 起 App 无法访问其他 App 在外部存储的私有目录，**即使已授予「所有文件访问权限」也一样**（Android 13 进一步封死了用原始文件路径绕过的口子）：
+读 B 站缓存（`/storage/emulated/0/Android/data/tv.danmaku.bili/download/`）的方式随系统版本不同，
+App 因此保留两条扫描路径（UI 上是两个按钮，每个按钮下方都标了**本机是否适用**）：
+
+| Android | API | 可读方式 | 用哪个按钮 | 前置条件 |
+| --- | --- | --- | --- | --- |
+| 7.0 – 9.0 | 24–28 | App 自身权限直读（scoped storage 之前） | 扫描 B 站缓存目录 | 运行时 `READ_EXTERNAL_STORAGE`（App 会自动申请） |
+| 10 | 29 | 同上（**未在真机验证**） | 扫描 B 站缓存目录 | 同上 |
+| **11 及以上** | **30+** | **只有 shell / root 能读** | **Shizuku 扫描 B 站缓存** | Shizuku 已安装并激活 |
+
+关于 Android 11+：出于隐私保护，App 无法访问其他 App 在外部存储的私有目录，
+**即使已授予「所有文件访问权限」也一样**（Android 13 进一步封死了用原始文件路径绕过的口子）：
 
 > Write access to all internal storage directories **except `/Android/data/`** … Apps that are granted this permission still can't access the app-specific directories that belong to other apps.
 > —— [Manage all files on a storage device](https://developer.android.com/training/data-storage/manage-all-files)
 
-而 B 站缓存固定在 `/storage/emulated/0/Android/data/tv.danmaku.bili/download/`，且 B 站不允许自定义缓存路径。
+因此 11+ 只能以 shell(uid 2000) 身份读取 —— 即依赖 [Shizuku](https://shizuku.rikka.app/)。
 
-因此在 Android 11 及以上，「扫描 B 站缓存目录」无法直接工作。可行路径：先用 **Shizuku / adb / 支持 Shizuku 的文件管理器**把缓存导出到公共目录（如 `/sdcard/Download/bili/`），再用本 App 的「手动选择目录」处理。彻底解决需要给 App 接入 Shizuku。
+> ⚠️ **Android 10（API 29）这条边界未实测**（开发机上只有 Android 15）。代码按 API 30 划线：
+> 若某台 Android 10 实际读不到，界面会提示改用 Shizuku，不会给出错误结果。
+
+### 为什么 FFmpeg 还需要「先把文件搬出来」
+
+`FFmpegKit` 跑在 **App 进程内（App 的 UID）**，所以即便 Shizuku 已就绪，FFmpeg 也读不到
+`/Android/data/` 下由 shell 扫出来的 m4s。因此合并前必须先用 shell 身份把 `video.m4s` +
+`audio.m4s` 复制到「**shell 可写、App 可读**」的中转目录（App 的外部私有缓存目录
+`/storage/emulated/0/Android/data/<pkg>/cache`），再交给 FFmpeg。
+这就是 `src/lib/materializer.ts` 这个抽象存在的原因（另一个实现 `passthrough` 用于源本就 App 可读的场景）。
+
+## 其它限制 / 待办
+
+- **输出目录**当前固定为 `/storage/emulated/0/Movies/`：Android 11+ 用**直接路径**写公共目录需要
+  「所有文件访问权限」（部分 ROM 如 ColorOS 在设置里点不开该开关）；Android ≤9 需要
+  `WRITE_EXTERNAL_STORAGE`。计划改为可配置（含用 SAF 选输出目录）。
+- 「**手动选择目录**」适用于缓存已导出到公共目录（如 `Download/`）的场景，任何版本都可用、不依赖特殊权限。
+- 本地库 `modules/react-native-shizuku` 尚未发布到 npm，暂以 `file:modules/react-native-shizuku` 在仓库内引用。
 
 ## 说明
 
 - FFmpegKit 官方已于 2025 年退役，本项目使用社区重建版 `@mtd1410/react-native-ffmpegkit`（New Architecture / TurboModule，LGPL v3）。
 - 默认使用 `https` 变体（对 `-c copy` 足够）。如需完整编解码能力，可在 `expo prebuild` 后的 `android/build.gradle` 里设置 `ext { ffmpegKitPackage = "full" }`。
-- 输出目录当前固定为 `/storage/emulated/0/Movies/`，后续可改为可配置。
