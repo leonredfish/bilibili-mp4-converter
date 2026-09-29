@@ -159,13 +159,40 @@ export function outputPathFor(item: VideoItem, outDir: string): string {
 }
 
 /**
- * 目标是否已存在。
+ * 输出文件已存在时的策略。
  *
- * 供「已存在则跳过」策略使用：默认不覆盖已经合并好的文件——
- * 避免一次误点把上次的成果冲掉；需要重做时删掉目标文件即可。
+ * - `overwrite`：照写，FFmpeg 的 `-y` 会覆盖同名文件
+ * - `skip`：已存在就不做（默认）—— 避免一次误点把上次的成果冲掉
+ * - `rename`：另存为「xxx (2).mp4」，两份都留着
  */
-export async function outputExists(item: VideoItem, outDir: string): Promise<boolean> {
-  return ReactNativeBlobUtil.fs.exists(outputPathFor(item, outDir));
+export type OutputStrategy = 'overwrite' | 'skip' | 'rename';
+
+/** rename 策略下最多试到的序号（异常目录里避免无限循环） */
+const RENAME_LIMIT = 999;
+
+/**
+ * 按策略算出这次该写哪个路径；返回 `null` 表示「按策略跳过」。
+ *
+ * 注意：这里**不做 materialize**，所以判「跳过」是零成本的
+ * （不会先把 450MB 搬到中转目录、再发现其实不用做）。
+ */
+export async function resolveOutputPath(
+  item: VideoItem,
+  outDir: string,
+  strategy: OutputStrategy = 'skip',
+): Promise<string | null> {
+  const base = outputPathFor(item, outDir);
+  if (strategy === 'overwrite') return base;
+  if (!(await ReactNativeBlobUtil.fs.exists(base))) return base;
+  if (strategy === 'skip') return null;
+
+  // rename：找第一个不冲突的序号
+  const stem = base.endsWith('.mp4') ? base.slice(0, -'.mp4'.length) : base;
+  for (let n = 2; n <= RENAME_LIMIT; n++) {
+    const candidate = `${stem} (${n}).mp4`;
+    if (!(await ReactNativeBlobUtil.fs.exists(candidate))) return candidate;
+  }
+  throw new Error(`同名文件过多（已试到 (${RENAME_LIMIT})），请先清理输出目录`);
 }
 
 /** 通知系统媒体库，否则新写入的 mp4 不会出现在相册/播放器里（尽力而为，失败不影响结果） */
@@ -184,16 +211,21 @@ async function notifyMediaStore(path: string): Promise<void> {
  * `materializer` 负责把 item 的 m4s 变成 **FFmpegKit（App 进程）可读** 的路径：
  * Shizuku 场景必须先搬到中转目录，公共目录场景是直通。临时文件在成功与失败时
  * 都会被清理（`finally`）。
+ *
+ * `outPath` 由调用方经 `resolveOutputPath()` 按「输出已存在策略」定好后传入
+ * （可能是 rename 后的新路径）；**必填**，故意不给默认值；
+ * 之前这里默认 `outputPathFor(...)`，于是块内同名 `const` 静默遮蔽了参数，
+ * 算好的重命名路径被丢掉、仍然写回默认路径（tsc 不报错，只有真机才看得出来）。
  */
 export async function mergeToMp4(
   item: VideoItem,
   outDir: string,
   materializer: Materializer,
+  outPath: string,
 ): Promise<string> {
   const media = await materializer.materialize(item);
   try {
     await ensureDir(outDir);
-    const outPath = outputPathFor(item, outDir);
 
     const session = await FFmpegKit.execute(
       `-i "${media.video}" -i "${media.audio}" -c copy -y -- "${outPath}"`,

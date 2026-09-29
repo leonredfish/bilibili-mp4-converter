@@ -1,5 +1,6 @@
-import { Pressable, StyleSheet, TextInput } from 'react-native';
+import { StyleSheet, TextInput } from 'react-native';
 
+import { ChipRow } from './chip-row';
 import { ThemedText } from './themed-text';
 import { ThemedView } from './themed-view';
 
@@ -13,10 +14,10 @@ import { DEFAULT_OUTPUT_DIR } from '@/lib/bilibili';
  * 这里用**真实路径**而不是 SAF 选目录：FFmpegKit 需要直接文件路径，
  * SAF 的 tree URI 它用不了（要转存一道，得不偿失）。
  */
-const PRESETS = [
-  { label: 'Movies', path: '/storage/emulated/0/Movies' },
-  { label: 'Download', path: '/storage/emulated/0/Download' },
-  { label: 'DCIM', path: '/storage/emulated/0/DCIM' },
+const PRESETS: { value: string; label: string }[] = [
+  { value: '/storage/emulated/0/Movies', label: 'Movies' },
+  { value: '/storage/emulated/0/Download', label: 'Download' },
+  { value: '/storage/emulated/0/DCIM', label: 'DCIM' },
 ];
 
 type Props = {
@@ -45,21 +46,7 @@ export function OutputDirPicker({ value, onChange, disabled }: Props) {
         editable={!disabled}
       />
 
-      <ThemedView style={styles.presetRow}>
-        {PRESETS.map((preset) => (
-          <Pressable
-            key={preset.path}
-            onPress={() => onChange(preset.path)}
-            disabled={disabled}
-            style={({ pressed }) => pressed && styles.pressed}>
-            <ThemedView
-              type={value === preset.path ? 'backgroundSelected' : 'backgroundElement'}
-              style={styles.presetChip}>
-              <ThemedText type="small">{preset.label}</ThemedText>
-            </ThemedView>
-          </Pressable>
-        ))}
-      </ThemedView>
+      <ChipRow options={PRESETS} value={value} onChange={onChange} disabled={disabled} />
     </ThemedView>
   );
 }
@@ -74,17 +61,5 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.two,
     fontSize: 14,
     backgroundColor: 'rgba(127,127,127,0.12)',
-  },
-  presetRow: {
-    flexDirection: 'row',
-    gap: Spacing.two,
-  },
-  presetChip: {
-    paddingVertical: Spacing.one,
-    paddingHorizontal: Spacing.three,
-    borderRadius: Spacing.three,
-  },
-  pressed: {
-    opacity: 0.7,
   },
 });

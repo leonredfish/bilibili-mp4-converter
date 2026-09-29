@@ -100,7 +100,7 @@ export function MergeResultPanel({
 
       {outcome.skipped.length > 0 ? (
         <ThemedText type="small" themeColor="textSecondary">
-          （跳过的文件已存在；要重做请先删掉对应 mp4）
+          （跳过的项目标已存在；把上面「输出文件已存在时」改成「覆盖」或「重命名」即可重做）
         </ThemedText>
       ) : null}
 

@@ -30,6 +30,7 @@ export async function mergeToMp4(
   _item: VideoItem,
   _outDir: string,
   _materializer: Materializer,
+  _outPath: string,
 ): Promise<string> {
   return '';
 }
@@ -38,6 +39,13 @@ export function outputPathFor(_item: VideoItem, outDir: string): string {
   return outDir;
 }
 
-export async function outputExists(_item: VideoItem, _outDir: string): Promise<boolean> {
-  return false;
+export type OutputStrategy = 'overwrite' | 'skip' | 'rename';
+
+/** Web 端没有文件系统，一律放行（不会真的写盘） */
+export async function resolveOutputPath(
+  _item: VideoItem,
+  outDir: string,
+  _strategy?: OutputStrategy,
+): Promise<string | null> {
+  return outDir;
 }

@@ -8,10 +8,11 @@ import {
   DEFAULT_BILIBILI_CACHE_DIR,
   DEFAULT_OUTPUT_DIR,
   mergeToMp4,
-  outputExists,
   outputPathFor,
   pickDirectory,
+  resolveOutputPath,
   scanDirectory,
+  type OutputStrategy,
   type VideoItem,
 } from '@/lib/bilibili';
 import { ANDROID_API_LEVEL, NEEDS_SHELL_FOR_APP_DATA } from '@/lib/fs-adapter';
@@ -74,6 +75,8 @@ export function useConverter() {
   const [mergeOutcome, setMergeOutcome] = useState<MergeOutcome | null>(null);
   const [error, setError] = useState('');
   const [outputDir, setOutputDir] = useState(DEFAULT_OUTPUT_DIR);
+  /** 输出文件已存在时的策略（默认「跳过」，避免误点把上次成果冲掉） */
+  const [outputStrategy, setOutputStrategy] = useState<OutputStrategy>('skip');
 
   /** 合并进度（长批次要能看到进展） */
   const [progress, setProgress] = useState<MergeProgress | null>(null);
@@ -246,11 +249,14 @@ export function useConverter() {
       const label = `P${item.page} ${item.part ?? item.title}`;
       setProgress({ done: i, total: targets.length, label });
       try {
-        // 默认不覆盖已存在的输出（见 outputExists 的注释）
-        if (await outputExists(item, outputDir)) {
+        // 先按「输出已存在策略」定路径；skip 时直接得 null（这一步不做搬运，零成本）
+        const outPath = await resolveOutputPath(item, outputDir, outputStrategy);
+        if (outPath === null) {
           skipped.push(outputPathFor(item, outputDir));
         } else {
-          ok.push(await mergeToMp4(item, outputDir, materializer ?? passthroughMaterializer));
+          ok.push(
+            await mergeToMp4(item, outputDir, materializer ?? passthroughMaterializer, outPath),
+          );
         }
       } catch (e) {
         failed.push({ item, label, message: e instanceof Error ? e.message : String(e) });
@@ -318,6 +324,8 @@ export function useConverter() {
     error,
     outputDir,
     setOutputDir,
+    outputStrategy,
+    setOutputStrategy,
     shizukuStatus,
     shizukuInfo,
     handleShizukuAction,

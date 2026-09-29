@@ -7,6 +7,7 @@ import {
   MergeResultPanel,
 } from '@/components/merge-panel';
 import { OutputDirPicker } from '@/components/output-dir-picker';
+import { OutputStrategyPicker } from '@/components/output-strategy-picker';
 import { ShizukuPanel } from '@/components/shizuku-panel';
 import { SourceActions } from '@/components/source-actions';
 import { ThemedText } from '@/components/themed-text';
@@ -41,6 +42,8 @@ export default function ConverterScreen() {
     error,
     outputDir,
     setOutputDir,
+    outputStrategy,
+    setOutputStrategy,
     shizukuStatus,
     shizukuInfo,
     handleShizukuAction,
@@ -85,6 +88,12 @@ export default function ConverterScreen() {
               />
 
               <OutputDirPicker value={outputDir} onChange={setOutputDir} disabled={busy} />
+
+              <OutputStrategyPicker
+                value={outputStrategy}
+                onChange={setOutputStrategy}
+                disabled={busy}
+              />
 
               {dir ? (
                 <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
