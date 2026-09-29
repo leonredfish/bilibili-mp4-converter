@@ -33,7 +33,11 @@ export function createShizukuMaterializer(tempDir: string): Materializer {
 
       // 清理失败不应影响调用方：临时目录本身由系统兜底回收
       const dispose = async (): Promise<void> => {
-        await Shizuku.remove(dir, { recursive: true }).catch(() => {});
+        try {
+          await Shizuku.remove(dir, { recursive: true });
+        } catch {
+          // 清理失败不影响调用方
+        }
       };
 
       try {
